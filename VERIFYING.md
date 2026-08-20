@@ -74,8 +74,11 @@ for your workload, which is exactly what makes this knob worth having.
 ## 4. Do quantized checkpoints load and decode?
 
 ```sh
-cargo run --release --example transcribe -- sample.wav --model mlx-community/whisper-large-v3-turbo-q4
+cargo run --release --example transcribe -- sample.wav --model mlx-community/whisper-tiny-mlx-4bit
 ```
+
+The mlx-community naming convention is a `-4bit` / `-8bit` suffix; substitute
+whichever quantized repo you can confirm exists, since these come and go.
 
 Previously this failed with a clear "not supported yet" error. It should now
 load and produce a sensible transcript.
@@ -92,6 +95,12 @@ Two specific things to watch:
   inside mlx rather than with a clear message here.
 
 Compare resident memory against the f16 model to confirm the win is real.
+
+Combining `--fp32` with a quantized checkpoint may fail inside
+`quantized_matmul`, since the activations would be f32 while the checkpoint's
+scales are fp16. Upstream has the same exposure, so that would be parity
+rather than a bug in this port — don't chase it unless the default f16 path
+fails too.
 
 ## 5. Is the release binary self-contained?
 
