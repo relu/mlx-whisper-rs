@@ -212,6 +212,13 @@ pub fn require_assets() -> Option<PathBuf> {
 /// test after it never runs. Forcing the CPU backend keeps the numerics
 /// identical — every fixture here is device-independent — while avoiding Metal
 /// entirely. Left opt-in so a real Mac still exercises the GPU path by default.
+///
+/// This does **not** make MLX safe to drive from several threads at once, and
+/// libtest threads a file's tests by default. Tests that only build arrays and
+/// run element-wise ops have been fine, but three tests building models and
+/// running forward passes concurrently segfault inside MLX with no assertion
+/// and no backtrace — see the `SERIAL` mutex in `tests/decoder_cache.rs`. Any
+/// new test doing that much MLX work should serialise itself the same way.
 pub fn init_device() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {

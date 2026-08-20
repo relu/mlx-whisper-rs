@@ -72,14 +72,22 @@ fn lcg(n: usize, seed: u64) -> Vec<f32> {
     out
 }
 
-/// Serialises the tests in this file.
+/// Serialises the tests in this file. **Required, not defensive.**
 ///
-/// They are the only tests in the suite that build a model and run a forward
-/// pass, and libtest runs the file's tests on separate threads by default. MLX
-/// work issued concurrently from several threads shares one global stream and
-/// scheduler; keeping it to one thread at a time removes that variable. A
-/// `Mutex` rather than `--test-threads=1` so the constraint travels with the
-/// code instead of living in the CI invocation.
+/// libtest runs a file's tests on separate threads, and these three are the
+/// only ones in the suite that build a model and run a forward pass. Doing
+/// that from three threads at once segfaults inside MLX — reproducibly, on
+/// CI, before any test could report, which is what a SIGSEGV in a test binary
+/// looks like: no assertion, no backtrace, all three tests simply gone. The
+/// arrays are never shared between the threads; concurrent graph construction
+/// on MLX's global stream is enough on its own.
+///
+/// A `Mutex` rather than `--test-threads=1` so the constraint travels with the
+/// code instead of living in a CI invocation someone can copy without.
+///
+/// Anything added here that touches MLX must take this lock too. If a future
+/// crash ever looks like this one again, print a marker before each MLX call
+/// and read the last line under `--nocapture`; that is how this one was found.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 /// Lock `SERIAL`, ignoring poisoning — a panic in one test should fail that
@@ -90,53 +98,33 @@ fn serial() -> MutexGuard<'static, ()> {
 
 /// A model whose positional embedding is actually position-dependent, plus a
 /// stand-in for the encoder output to cross-attend to.
-///
-/// The `step` markers exist because a segfault inside MLX takes the whole test
-/// binary down before libtest reports anything at all; with `--nocapture`, as
-/// CI runs it, the last line printed is the call that died.
 fn model_and_audio_features() -> (Whisper, Array) {
-    let step = |s: &str| eprintln!("[decoder_cache] {s}");
-
-    step("init_device");
     common::init_device();
     let dims = tiny_dims();
-
-    step("Whisper::new");
     let mut model = Whisper::new(dims.clone()).expect("build the model");
 
-    step("sinusoids");
-    let pe = sinusoids(dims.n_text_ctx, dims.n_text_state).expect("sinusoids");
-    step("eval sinusoids");
-    eval([&pe]).expect("evaluate the positional embedding");
-
     // Overwrite the zeros the constructor leaves behind — see the module docs.
+    let pe = sinusoids(dims.n_text_ctx, dims.n_text_state).expect("sinusoids");
+    eval([&pe]).expect("evaluate the positional embedding");
     model.decoder.positional_embedding = pe;
 
-    step("audio features");
     let n = dims.n_audio_ctx * dims.n_audio_state;
     let xa = Array::from_slice(
         &lcg(n, 0x5EED),
         &[1, dims.n_audio_ctx as i32, dims.n_audio_state as i32],
     );
-    step("eval audio features");
     eval([&xa]).expect("evaluate the audio features");
 
-    step("model ready");
     (model, xa)
 }
 
 /// One `[n_vocab]` row of a `[1, seq_len, n_vocab]` logits array.
 ///
-/// The `reshape` and the `eval` are both load-bearing. Indexing produces a
-/// strided view over the parent buffer, and `as_slice` hands back a plain
-/// `&[f32]` over the underlying allocation — reading a view's rows through it
-/// walks off the row it was meant to return. `reshape` forces a contiguous
-/// copy, and `eval` materialises it: MLX is lazy, so without that the copy is
-/// still an unevaluated graph node with no buffer behind it.
-///
-/// Elsewhere in the suite `as_slice` is called with neither, but those arrays
-/// are whole contiguous results (`sinusoids(...)`, a log-mel spectrogram)
-/// rather than a row sliced out of a larger one.
+/// `reshape` forces a contiguous copy and `eval` materialises it before
+/// `as_slice` reads the buffer, matching how `src/transcribe.rs` evaluates
+/// before `as_slice`. Elsewhere in this suite a bare `as_slice` is fine,
+/// because those arrays are whole contiguous results — a `sinusoids` table, a
+/// log-mel spectrogram — rather than one row sliced out of a larger array.
 fn logits_row(logits: &Array, pos: i32) -> Vec<f32> {
     let row = logits
         .index((0i32,))
@@ -158,7 +146,6 @@ const TOL: f32 = 1e-3;
 fn cached_decoding_matches_a_single_full_pass() {
     let _serial = serial();
     let (mut model, xa) = model_and_audio_features();
-    eprintln!("[decoder_cache] full-sequence forward");
 
     let all = Array::from_slice(&IDS[..], &[1, IDS.len() as i32]);
     let (full, _, _) = model
@@ -197,7 +184,6 @@ fn cached_decoding_matches_a_single_full_pass() {
 fn the_self_attention_cache_grows_one_position_per_step() {
     let _serial = serial();
     let (mut model, xa) = model_and_audio_features();
-    eprintln!("[decoder_cache] cache-shape walk");
     let dims = tiny_dims();
 
     let mut cache: Option<Vec<Option<BlockCache>>> = None;
@@ -244,7 +230,6 @@ fn the_self_attention_cache_grows_one_position_per_step() {
 fn logits_depend_on_position() {
     let _serial = serial();
     let (mut model, xa) = model_and_audio_features();
-    eprintln!("[decoder_cache] position-dependence check");
 
     let all = Array::from_slice(&IDS[..], &[1, IDS.len() as i32]);
     let (full, _, _) = model
