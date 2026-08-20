@@ -80,11 +80,6 @@ jobs:
           system_profiler SPDisplaysDataType 2>/dev/null | head -20 || true
 
       - name: Run tests
-        # Several tests are EXPECTED to fail until the findings in PARITY.md
-        # are fixed — see the expected-fail table there. This step is allowed
-        # to fail so the summary below always renders; the build steps above
-        # are the gating signal.
-        continue-on-error: true
         id: tests
         run: cargo test --verbose -- --nocapture
 
@@ -97,6 +92,7 @@ jobs:
             echo "- build (lib + examples): **${{ job.status }}**"
             echo "- tests: **${{ steps.tests.outcome }}**"
             echo ""
-            echo "See [PARITY.md](../blob/${{ github.sha }}/PARITY.md) for the"
-            echo "list of tests expected to fail before the fixes land."
+            echo "MLX is pinned to the CPU device here — GitHub's macOS runners"
+            echo "have paravirtualised Metal, where MLX GPU work aborts."
+            echo "See [PARITY.md](../blob/${{ github.sha }}/PARITY.md)."
           } >> "$GITHUB_STEP_SUMMARY"

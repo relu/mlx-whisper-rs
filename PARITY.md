@@ -527,24 +527,44 @@ detection; the seek-advance branch selection; `prompt_reset_since` on
   `tests/model_math_parity.rs`, `tests/wav_parsing.rs`, and in-crate unit tests
   in `src/decoding.rs`.
 
-The fixes for every finding above marked **BUG**, plus the RISK items with a
-clear correct answer, are applied in the follow-up commit. Measured evidence
-from the pre-fix CI run:
+All findings above marked **BUG**, plus the RISK items with a clear correct
+answer, are fixed in the follow-up commit. **The full suite — 52 tests — passes
+on macOS arm64 in CI.**
+
+Measured evidence from the pre-fix CI run, which is why two of these were worth
+fixing rather than documenting:
 
 * `compression_ratio("the quick brown fox jumps over the lazy dog")` returned
-  **0.796** against CPython zlib's **0.86** — DEC-5 confirmed, and the reason
-  `flate2` now builds against C zlib rather than miniz_oxide.
+  **0.796** against CPython zlib's **0.86** — hence `flate2` now builds against
+  C zlib instead of miniz_oxide.
+* The tokenizer pre-tokenizer was validated before landing: the hand-rolled
+  `pat_str` splitter matches Python's `regex` module on **4028/4028** inputs
+  (4000 of them random), and the full encode path reproduces all 14 tokenizer
+  fixture cases.
 
-Two findings are deliberately **not** fixed:
+Three findings are deliberately **not** fixed:
 
-* **MODEL-3** (no fp16/dtype knob) — a performance and API question, not a
-  correctness one, and adding a dtype parameter touches every layer.
+* **MODEL-3** (no fp16/dtype knob) — a performance and API question rather than
+  a correctness one, and threading a dtype parameter touches every layer.
 * **MODEL-1** is *rejected*, not implemented: quantized repos now fail with an
   actionable error instead of loading garbage. Real support needs
-  `QuantizedLinear`/`QuantizedEmbedding`.
+  `QuantizedLinear` / `QuantizedEmbedding`.
+* **DEC-2** — the monotonicity clause. This port follows `openai/whisper` and
+  enforces the constraint that `mlx_whisper` accidentally disabled. Pinned by
+  `decoding::tests::timestamp_rules_enforce_monotonic_timestamps`; both
+  expectation sets stay committed so the decision is reversible.
 
-AUDIO-2 has no direct test — asserting on the language-ID mel slice needs a
-loaded model.
+### Not covered by CI
+
+The **GPU path**. `MLX_WHISPER_RS_TEST_CPU` pins MLX to the CPU device because
+GitHub's macOS runners are VMs with paravirtualised Metal, where GPU work
+aborts (`AppleParavirtCommandBuffer` assertion → SIGABRT, which killed the
+whole test binary). Everything numeric here is device-independent, but a real
+Mac is still needed to exercise Metal.
+
+Also uncovered: anything requiring **model weights** — the encoder/decoder
+forward passes, real transcription, and the `transcribe` seek loop. A golden
+test against Python-mlx logits for `whisper-tiny` would close that gap.
 
 ## Suggested order of work
 
