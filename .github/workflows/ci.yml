@@ -18,8 +18,15 @@ env:
 jobs:
   build:
     # Apple Silicon. mlx-sys links Foundation/objc/Metal/Accelerate
-    # unconditionally, so this crate cannot build anywhere else.
-    runs-on: macos-14
+    # unconditionally, so this crate cannot build anywhere else. For macOS the
+    # *unsuffixed* labels are the arm64 ones; `macos-15-intel` and
+    # `macos-26-intel` are the x86 variants and would fail in the MLX build.
+    #
+    # macos-14 began deprecation on 2026-07-06 and is fully unsupported after
+    # 2026-11-02 (actions/runner-images#13518), so this is pinned forward
+    # rather than to `macos-latest`, which still resolves to macos-15 and would
+    # move under us on GitHub's schedule instead of ours.
+    runs-on: macos-26
     # The first build compiles MLX from source: mlx-sys cmake-builds its
     # vendored mlx-c with MLX_C_USE_SYSTEM_MLX=OFF, which makes CMake clone
     # ml-explore/mlx v0.25.1 and build it in-tree. Budget accordingly; later
@@ -45,18 +52,24 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: ${{ runner.os }}-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-arm64-cargo-
+          key: macos-26-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-26-arm64-cargo-
 
       # The compiled MLX lives in target/**/build/mlx-sys-*/out, so caching
       # target/ is what actually saves the 10-20 minute rebuild. Keyed on
       # Cargo.lock so a dependency bump invalidates it.
+      #
+      # The image label is in the key, not `${{ runner.os }}`, which is just
+      # "macOS" for every version. Without it, C++ objects built against the
+      # macOS 14 SDK by Xcode 15.4 would be restored onto a macOS 26 runner
+      # with Clang 21 — a stale-artifact link failure that would look like a
+      # code problem. Bump the label here whenever `runs-on` moves.
       - name: Cache build directory (contains the compiled MLX)
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-arm64-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-arm64-target-
+          key: macos-26-arm64-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-26-arm64-target-
 
       # The single most important signal: does the crate, and do the tests,
       # actually compile? Separated from the test run so a compile failure is
