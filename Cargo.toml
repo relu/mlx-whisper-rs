@@ -22,6 +22,16 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # and `compression_ratio` feeds a hard 2.4 threshold, so a few bytes of
 # difference flips the temperature-fallback decision on borderline segments.
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
+# Not used directly; declared only to turn on `static` for the copy of
+# `libz-sys` that flate2's `zlib` backend pulls in. Without it `libz-sys` runs
+# a pkg-config probe and links `-lz` dynamically, which resolves to the
+# system `/usr/lib/libz.1.dylib` on a clean machine but to
+# `/opt/homebrew/opt/zlib/lib/libz.dylib` if `PKG_CONFIG_PATH` happens to
+# point at the keg. With `static` it skips pkg-config entirely and compiles
+# the vendored stock zlib sources, so the deflate output stays byte-identical
+# to CPython's and the binary gains no Homebrew dylib. Note that
+# `LIBZ_SYS_STATIC=0` in the environment still overrides this feature.
+libz-sys = { version = "1", features = ["static"] }
 # tiktoken's pre-tokenization pattern keys on `\p{L}` and `\p{N}`, the raw
 # Unicode *general categories*. `char::is_alphabetic` is the derived
 # `Alphabetic` property instead — wider by `Nl` and `Other_Alphabetic`, which
