@@ -132,7 +132,7 @@ fn log_mel_produces_the_upstream_frame_count() {
     let sig = common::synth_audio();
     let a = Array::from_slice(&sig, &[sig.len() as i32]);
 
-    let mel = log_mel_spectrogram(a, 80, &dir).expect("log_mel_spectrogram");
+    let mel = log_mel_spectrogram(a, 80, &dir, 0).expect("log_mel_spectrogram");
     let doc = common::json("audio");
     let want_frames = doc["mel_80"]["shape"][0].as_i64().unwrap() as i32;
 
@@ -154,7 +154,7 @@ fn log_mel_full_chunk_yields_exactly_n_frames() {
     let sig = vec![0.0f32; N_SAMPLES];
     let a = Array::from_slice(&sig, &[sig.len() as i32]);
 
-    let mel = log_mel_spectrogram(a, 80, &dir).expect("log_mel_spectrogram");
+    let mel = log_mel_spectrogram(a, 80, &dir, 0).expect("log_mel_spectrogram");
     assert_eq!(
         mel.shape()[0],
         N_FRAMES as i32,
@@ -171,7 +171,7 @@ fn log_mel_matches_upstream_values() {
     for n_mels in [80usize, 128] {
         let want = common::f32s(&format!("mel_{n_mels}"));
         let a = Array::from_slice(&sig, &[sig.len() as i32]);
-        let mel = log_mel_spectrogram(a, n_mels, &dir).expect("log_mel_spectrogram");
+        let mel = log_mel_spectrogram(a, n_mels, &dir, 0).expect("log_mel_spectrogram");
         let got: &[f32] = mel.as_slice();
 
         // 1e-4 absolute: the pipeline runs log10 over a float32 FFT, so the
@@ -190,7 +190,7 @@ fn log_mel_normalisation_floor_is_global() {
     let dir = common::fixtures_dir();
     let sig = common::synth_audio();
     let a = Array::from_slice(&sig, &[sig.len() as i32]);
-    let mel = log_mel_spectrogram(a, 80, &dir).expect("log_mel_spectrogram");
+    let mel = log_mel_spectrogram(a, 80, &dir, 0).expect("log_mel_spectrogram");
     let got: &[f32] = mel.as_slice();
 
     let max = got.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -244,4 +244,32 @@ fn pad_or_trim_is_identity_at_exact_length() {
     assert_eq!(got.len(), N_FRAMES);
     assert_eq!(got[0], 0.0);
     assert_eq!(got[N_FRAMES - 1], (N_FRAMES - 1) as f32);
+}
+
+/// `padding` appends zero **samples** before the STFT, the way upstream's
+/// `log_mel_spectrogram(audio, n_mels, padding=N_SAMPLES)` does.
+///
+/// `transcribe` relies on this to compute `content_frames = frames - N_FRAMES`
+/// and to run language detection over the padded mel, so the frame arithmetic
+/// has to come out exactly.
+#[test]
+fn log_mel_padding_adds_exactly_n_frames() {
+    common::init_device();
+    let dir = common::fixtures_dir();
+    let sig = common::synth_audio();
+
+    let unpadded = {
+        let a = Array::from_slice(&sig, &[sig.len() as i32]);
+        log_mel_spectrogram(a, 80, &dir, 0).expect("log_mel_spectrogram")
+    };
+    let padded = {
+        let a = Array::from_slice(&sig, &[sig.len() as i32]);
+        log_mel_spectrogram(a, 80, &dir, N_SAMPLES).expect("log_mel_spectrogram")
+    };
+
+    assert_eq!(
+        padded.shape()[0] - unpadded.shape()[0],
+        N_FRAMES as i32,
+        "padding with N_SAMPLES must add exactly N_FRAMES mel frames"
+    );
 }
