@@ -191,8 +191,16 @@ def gen_tokenizer() -> dict:
             "non_speech_tokens": sorted(tk.non_speech_tokens),
             "encode_space": tk.encode(" "),
             "all_language_tokens_len": len(tk.all_language_tokens),
-            "all_language_tokens_first8": list(tk.all_language_tokens[:8]),
-            "all_language_codes_first8": list(tk.all_language_codes[:8]),
+            # Upstream builds `special_tokens` by iterating a Python *set*
+            # (`tokenizer.py:145`), so `all_language_tokens` comes out in an
+            # order that varies with PYTHONHASHSEED — verified across seeds.
+            # Only the set and the token->code pairing are reproducible, so
+            # those are what get pinned. Recording the raw order would bake one
+            # arbitrary run into the fixtures.
+            "all_language_tokens_sorted": sorted(tk.all_language_tokens),
+            "all_language_pairs_sorted": sorted(
+                [t, c] for t, c in zip(tk.all_language_tokens, tk.all_language_codes)
+            ),
         }
         try:
             v["language_token"] = tk.language_token

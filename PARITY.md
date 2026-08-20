@@ -37,7 +37,7 @@ Severity key:
 | `audio.rs` | 3 | 4 | 1 | 4 |
 | `decoding.rs` | 2 | 5 | 6 | — |
 | `whisper.rs` / `load_models.rs` | 2 | 6 | 2 | 3 |
-| `transcribe.rs` / `tokenizer.rs` | 3 | 9 | 1 | 1 |
+| `transcribe.rs` / `tokenizer.rs` | 3 | 10 | 1 | 1 |
 
 The findings that change transcription output on **every** run are
 `AUDIO-1`, `AUDIO-2`, `DEC-1` and `TR-1`. `TOK-1` corrupts the sot sequence for
@@ -405,6 +405,30 @@ English instead of erroring.
 
 **Test:** `tests/tokenizer_parity.rs::language_outside_num_languages_window_is_rejected`,
 `::every_language_code_maps_to_its_positional_token`.
+
+### TOK-3 — `all_language_tokens` ordering is non-deterministic upstream — RISK (measured)
+
+`tokenizer.py:145` builds `special_tokens` by iterating
+`self.encoding.special_tokens_set` — a Python **set** — so
+`all_language_tokens` comes back in an order that changes with
+`PYTHONHASHSEED`. Measured across three seeds:
+
+```
+seed=1 first8: [50308, 50273, 50270, 50263, 50327, 50292, 50280, 50306]
+seed=2 first8: [50290, 50293, 50259, 50269, 50308, 50276, 50357, 50264]
+seed=3 first8: [50300, 50301, 50326, 50277, 50316, 50271, 50332, 50350]
+```
+
+The sorted set and the token→code pairing *are* stable across seeds (verified),
+and `all_language_codes` is derived from `all_language_tokens` by decoding, so
+`detect_language` stays correct despite the shuffle. It does mean the
+`[: self.num_languages]` truncation would drop an arbitrary language if the
+vocabulary ever carried more language tokens than `num_languages`.
+
+This port returns them in `LANGUAGES` order — deterministic, and a superset of
+what upstream actually guarantees. The tests assert the set and the pairing
+rather than the order, since pinning the order would bake one arbitrary run of
+the fixture generator into the suite.
 
 ### TOK-2 — the BPE encoder skips tiktoken's pre-tokenization — RISK (measured)
 

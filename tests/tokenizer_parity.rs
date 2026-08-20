@@ -110,8 +110,18 @@ fn non_speech_tokens_match_upstream() {
     assert_eq!(got, want, "non_speech_tokens set");
 }
 
+/// `all_language_tokens` must cover exactly the model's language block, and
+/// each token must decode back to the code paired with it.
+///
+/// Order is deliberately **not** asserted. Upstream builds `special_tokens` by
+/// iterating a Python set (`tokenizer.py:145`), so its `all_language_tokens`
+/// ordering varies with `PYTHONHASHSEED` — confirmed by running the reference
+/// under several seeds. Only the set and the token->code pairing are
+/// reproducible, so pinning the raw order would encode one arbitrary run of
+/// the generator. This port returns them in `LANGUAGES` order, which is
+/// deterministic and a superset of what upstream guarantees.
 #[test]
-fn all_language_tokens_are_contiguous_from_sot() {
+fn all_language_tokens_cover_the_language_block() {
     common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
@@ -128,20 +138,33 @@ fn all_language_tokens_are_contiguous_from_sot() {
         v["all_language_tokens_len"].as_u64().unwrap() as usize,
         "all_language_tokens length must equal num_languages"
     );
+
+    let mut got = toks.clone();
+    got.sort_unstable();
     assert_eq!(
-        toks.iter().take(8).cloned().collect::<Vec<_>>(),
-        common::as_u32s(&v["all_language_tokens_first8"]),
-        "all_language_tokens prefix"
+        got,
+        common::as_u32s(&v["all_language_tokens_sorted"]),
+        "all_language_tokens set"
     );
 
+    // Tokens and codes must stay aligned — detect_language zips them to build
+    // its probability map, so a misalignment would mislabel every language.
     let codes = tk.all_language_codes();
-    let want_codes: Vec<String> = v["all_language_codes_first8"]
+    assert_eq!(toks.len(), codes.len(), "tokens and codes must be the same length");
+    let mut pairs: Vec<(u32, String)> =
+        toks.iter().cloned().zip(codes.iter().cloned()).collect();
+    pairs.sort();
+
+    let want: Vec<(u32, String)> = v["all_language_pairs_sorted"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|s| s.as_str().unwrap().to_string())
+        .map(|p| {
+            let p = p.as_array().unwrap();
+            (p[0].as_u64().unwrap() as u32, p[1].as_str().unwrap().to_string())
+        })
         .collect();
-    assert_eq!(codes.iter().take(8).cloned().collect::<Vec<_>>(), want_codes);
+    assert_eq!(pairs, want, "token -> language-code pairing");
 }
 
 #[test]
