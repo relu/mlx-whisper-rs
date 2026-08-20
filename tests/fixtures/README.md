@@ -28,6 +28,7 @@ they can be regenerated off a Mac.
 | `logit_filters.json` | `SuppressBlank` / `SuppressTokens` / `ApplyTimestampRules` expectations — three sets for the timestamp rules, see below |
 | `model_math.json`, `sinusoids_10x8.f32` | positional-embedding reference values |
 | `text_metrics.json` | `compression_ratio` reference values |
+| `segmentation.json` | `transcribe` seek-loop arithmetic: window splitting, seek advance, silence skip, temperature fallback — see below |
 
 `.f32` files are raw little-endian `float32`, row-major, with the shape given
 in the corresponding `.json`.
@@ -36,6 +37,33 @@ Two inputs are **not** committed because they are regenerated bit-identically in
 Rust from formulas recorded in the JSON: the synthetic audio signal
 (`audio.json` → `input.formula`) and the synthetic logits
 (`logit_filters.json` → `lcg_note`, `row_shift_note`).
+
+## Note: `segmentation.json` needs no `mlx` at all
+
+[`tools/reference_segmentation.py`](../../tools/reference_segmentation.py)
+transcribes the `while seek < seek_clip_end` body of
+`mlx_whisper/transcribe.py` using nothing but the standard library — the seek
+loop's decision points are integer and float arithmetic over a token list, with
+no tensors in them. `gen_fixtures.py` calls into it like it calls into
+`reference_rules.py`, but it can also regenerate this one fixture on its own,
+on any machine:
+
+```bash
+python3 tools/reference_segmentation.py
+```
+
+Two reductions from upstream are deliberate and documented in that file:
+`clip_timestamps` is fixed at its default (the only case this port implements,
+which is what turns `segment_size` into an input) and `word_timestamps` is off.
+
+Each `split_window` case records `seek_delta`, upstream's raw advance, next to
+`seek_delta_port`, what this crate advances by. They differ for exactly one
+case, `stall_zero_advance`: when the last consumed timestamp is `<|0.00|>`
+upstream advances by zero and re-decodes the same window forever, while this
+port jumps a whole window. The `silence_skip` section records `upstream` and
+`port` the same way, and differs only at exact float equality. Both divergences
+are described in [`PARITY.md`](../../PARITY.md); the fixture exists so they
+cannot change silently.
 
 ## Note: `mel_filters.npz` vs `mel_filters_*.npy`
 

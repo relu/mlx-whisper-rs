@@ -519,6 +519,30 @@ waste on every run regardless.
 `initial_prompt_len`, right where the prompt is first encoded before the loop
 (`src/transcribe.rs:321-325`), and reused at the end (`:546`).
 
+### TR-7 — timestamp offsets were clamped at zero — **BUG**
+
+The per-segment offsets were computed with `u32::saturating_sub`:
+
+```rust
+let start_ts = sliced[0].saturating_sub(ts_begin) as f32;
+```
+
+Upstream subtracts plain Python integers
+(`sliced_tokens[0].item() - tokenizer.timestamp_begin`), so a slice that does
+not open on a timestamp token yields a **negative** offset and a segment that
+starts before the window does. Rust clamped that to `0`, silently moving the
+segment boundary. Every slice reachable today opens on a timestamp — the slice
+boundaries come from `consecutive`, which indexes timestamp pairs — so this was
+latent rather than live, but it is the kind of guard that turns a future
+divergence into a wrong answer instead of a visible one.
+
+**Fixed** in this change: the offsets are computed as `i64` and kept signed
+(`src/transcribe.rs`, `split_window`). The seek-advance arithmetic is left
+unsigned deliberately: `tokens[last_slice - 1]` is provably a timestamp there,
+and a hypothetical negative flowing into a `usize` frame count would be worse
+than the clamp. Pinned by `split_window_keeps_a_negative_start_offset` against
+the `negative_start_offset` fixture case.
+
 ### TOK-1 — language index is searched against the untruncated table — **BUG**
 
 Upstream truncates first: `langs = tuple(LANGUAGES.keys())[:num_languages]`,
@@ -732,8 +756,21 @@ whole test binary). Everything numeric here is device-independent, but a real
 Mac is still needed to exercise Metal.
 
 Also uncovered: anything requiring **model weights** — the encoder/decoder
-forward passes, real transcription, and the `transcribe` seek loop. A golden
-test against Python-mlx logits for `whisper-tiny` would close that gap.
+forward passes and real end-to-end transcription. A golden test against
+Python-mlx logits for `whisper-tiny` would close that gap.
+
+Two pieces that used to sit behind that wall no longer do. The `transcribe`
+seek loop's arithmetic — window splitting, seek advance, the silence skip and
+the temperature-fallback gate — was lifted into free functions over plain
+numbers (`split_window`, `should_skip_window`, `needs_fallback`, `text_tokens`
+in `src/transcribe.rs`) and is pinned against
+`tests/fixtures/segmentation.json`. And the decoder's KV-cache offset
+arithmetic is covered by `tests/decoder_cache.rs`, which asserts that a
+full-sequence forward pass equals token-by-token cached decoding on a
+randomly-initialised tiny model — an invariant that holds for any weights, so
+it needs no download. What is still model-only is the surrounding orchestration:
+the prompt buffer, `prompt_reset_since`, blank-segment clearing, and the
+encoder/decoder numerics themselves.
 
 ## Suggested order of work
 

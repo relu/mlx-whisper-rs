@@ -7,7 +7,7 @@
 
 mod common;
 
-use mlx_whisper_rs::whisper::sinusoids;
+use mlx_whisper_rs::whisper::{ModelDimensions, Whisper, sinusoids};
 
 #[test]
 fn sinusoids_small_case_matches_upstream() {
@@ -81,4 +81,54 @@ fn sinusoids_first_row_is_sin0_then_cos0() {
             got[c]
         );
     }
+}
+
+// ── Vocabulary-derived model configuration ───────────────────────────────────
+
+/// A model whose only interesting dimension is `n_vocab`. Everything else is
+/// as small as the constructors allow — `n_*_state` has to divide evenly by
+/// `n_*_head`, and `sinusoids` needs an even channel count.
+fn dims_with_vocab(n_vocab: usize) -> ModelDimensions {
+    ModelDimensions {
+        n_mels: 80,
+        n_audio_ctx: 2,
+        n_audio_state: 8,
+        n_audio_head: 2,
+        n_audio_layer: 1,
+        n_vocab,
+        n_text_ctx: 4,
+        n_text_state: 8,
+        n_text_head: 2,
+        n_text_layer: 2,
+    }
+}
+
+/// `is_multilingual` and `num_languages` are read off `n_vocab` alone, and both
+/// feed the tokenizer: the language block starts at `sot + 1` and runs for
+/// `num_languages` entries, so an off-by-one in either shifts every language
+/// token and every SOT sequence built from them. Both are one-line integer
+/// expressions with no test, and the boundary is the whole risk.
+///
+/// The three vocabulary sizes are the ones that actually ship: 51864 for the
+/// English-only models, 51865 for multilingual up to `large-v2`, and 51866 for
+/// the `large-v3` family, which added Cantonese as a 100th language.
+#[test]
+fn multilinguality_is_derived_from_the_vocabulary_size() {
+    common::init_device();
+
+    let english_only = Whisper::new(dims_with_vocab(51864)).expect("english-only model");
+    assert!(!english_only.is_multilingual(), "51864 is English-only");
+    assert_eq!(english_only.num_languages(), 51864 - 51765);
+
+    let multilingual = Whisper::new(dims_with_vocab(51865)).expect("multilingual model");
+    assert!(multilingual.is_multilingual(), "51865 is multilingual");
+    assert_eq!(multilingual.num_languages(), 99);
+
+    let large_v3 = Whisper::new(dims_with_vocab(51866)).expect("large-v3 model");
+    assert!(large_v3.is_multilingual(), "51866 is multilingual");
+    assert_eq!(
+        large_v3.num_languages(),
+        100,
+        "large-v3 has 100 languages: the 99 of large-v2 plus `yue`"
+    );
 }

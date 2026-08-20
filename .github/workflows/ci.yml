@@ -67,6 +67,14 @@ jobs:
       - name: Build tests (compile only)
         run: cargo test --no-run --verbose
 
+      # The segmentation fixture is the one golden that needs no mlx, so CI can
+      # cheaply confirm it still matches its generator. A fixture that has
+      # drifted from the reference it claims to come from proves nothing.
+      - name: Check the segmentation fixture is current
+        run: |
+          python3 tools/reference_segmentation.py
+          git diff --exit-code tests/fixtures/segmentation.json
+
       - name: Populate tokenizer assets
         run: |
           python3 -m pip install --user --quiet --break-system-packages numpy

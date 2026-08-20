@@ -37,6 +37,7 @@ from mlx_whisper.whisper import sinusoids
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from reference_rules import port_semantics_cases  # noqa: E402
+from reference_segmentation import build_fixture as build_segmentation  # noqa: E402
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -611,6 +612,9 @@ def main() -> int:
     write_json("logit_filters", gen_logit_filters())
     write_json("model_math", gen_model_math())
     write_json("text_metrics", gen_text_metrics())
+    # Pure stdlib — see tools/reference_segmentation.py, which can also be run
+    # on its own to regenerate this one fixture without an mlx install.
+    write_json("segmentation", build_segmentation())
     write_json("manifest", manifest)
 
     total = sum(p.stat().st_size for p in OUT.iterdir())

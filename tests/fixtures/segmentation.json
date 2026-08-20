@@ -1,0 +1,669 @@
+{
+  "constants": {
+    "eot": 50257,
+    "hop_length": 160,
+    "input_stride": 2,
+    "n_frames": 3000,
+    "sample_rate": 16000,
+    "time_precision": 0.02,
+    "timestamp_begin": 50364
+  },
+  "needs_fallback": {
+    "all_thresholds_disabled": {
+      "avg_logprob": -9.0,
+      "compression_ratio": 9.0,
+      "compression_ratio_threshold": null,
+      "logprob_threshold": null,
+      "needs_fallback": false,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": null
+    },
+    "both_bad": {
+      "avg_logprob": -2.0,
+      "compression_ratio": 3.0,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": true,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6
+    },
+    "clean": {
+      "avg_logprob": -0.3,
+      "compression_ratio": 1.5,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": false,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6
+    },
+    "compression_exactly_at_threshold": {
+      "avg_logprob": -0.3,
+      "compression_ratio": 2.4,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": false,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6
+    },
+    "logprob_exactly_at_threshold": {
+      "avg_logprob": -1.0,
+      "compression_ratio": 1.5,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": false,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6
+    },
+    "logprob_too_low": {
+      "avg_logprob": -2.0,
+      "compression_ratio": 1.5,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": true,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6
+    },
+    "no_speech_exactly_at_threshold": {
+      "avg_logprob": -0.3,
+      "compression_ratio": 3.0,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": true,
+      "no_speech_prob": 0.6,
+      "no_speech_threshold": 0.6
+    },
+    "silence_overrides_both": {
+      "avg_logprob": -2.0,
+      "compression_ratio": 3.0,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": false,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": 0.6
+    },
+    "too_repetitive": {
+      "avg_logprob": -0.3,
+      "compression_ratio": 3.0,
+      "compression_ratio_threshold": 2.4,
+      "logprob_threshold": -1.0,
+      "needs_fallback": true,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6
+    }
+  },
+  "silence_skip": {
+    "logprob_exactly_at_threshold": {
+      "avg_logprob": -1.0,
+      "logprob_threshold": -1.0,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": 0.6,
+      "port": false,
+      "upstream": true
+    },
+    "logprob_threshold_disabled": {
+      "avg_logprob": -2.0,
+      "logprob_threshold": null,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": 0.6,
+      "port": true,
+      "upstream": true
+    },
+    "no_speech_exactly_at_threshold": {
+      "avg_logprob": -2.0,
+      "logprob_threshold": -1.0,
+      "no_speech_prob": 0.6,
+      "no_speech_threshold": 0.6,
+      "port": false,
+      "upstream": false
+    },
+    "no_speech_threshold_disabled": {
+      "avg_logprob": -2.0,
+      "logprob_threshold": -1.0,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": null,
+      "port": false,
+      "upstream": false
+    },
+    "silence_and_low_logprob": {
+      "avg_logprob": -2.0,
+      "logprob_threshold": -1.0,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": 0.6,
+      "port": true,
+      "upstream": true
+    },
+    "silence_but_confident": {
+      "avg_logprob": -0.5,
+      "logprob_threshold": -1.0,
+      "no_speech_prob": 0.9,
+      "no_speech_threshold": 0.6,
+      "port": false,
+      "upstream": false
+    },
+    "speech": {
+      "avg_logprob": -0.3,
+      "logprob_threshold": -1.0,
+      "no_speech_prob": 0.1,
+      "no_speech_threshold": 0.6,
+      "port": false,
+      "upstream": false
+    }
+  },
+  "source": "mlx_whisper/transcribe.py 0.4.3, `while seek < seek_clip_end` body",
+  "split_window": {
+    "empty": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 30.0,
+          "end_pos": null,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": []
+        }
+      ],
+      "tokens": []
+    },
+    "last_timestamp_is_zero": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 30.0,
+          "end_pos": null,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            2000,
+            50364
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        2000,
+        50364
+      ]
+    },
+    "mid_file_offset": {
+      "seek": 3000,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 31.0,
+          "end_pos": 50,
+          "start": 30.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            50414
+          ]
+        },
+        {
+          "end": 32.0,
+          "end_pos": 100,
+          "start": 31.0,
+          "start_pos": 50,
+          "tokens": [
+            50414,
+            2000,
+            50464
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        50414,
+        50414,
+        2000,
+        50464
+      ]
+    },
+    "negative_start_offset": {
+      "seek": 0,
+      "seek_delta": 100,
+      "seek_delta_port": 100,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": -987.28,
+          "start_pos": -49364,
+          "tokens": [
+            1000,
+            50414
+          ]
+        }
+      ],
+      "tokens": [
+        1000,
+        50414,
+        50414,
+        2000
+      ]
+    },
+    "no_timestamps": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 30.0,
+          "end_pos": null,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            1000,
+            2000,
+            3000
+          ]
+        }
+      ],
+      "tokens": [
+        1000,
+        2000,
+        3000
+      ]
+    },
+    "one_pair_no_single_ending": {
+      "seek": 0,
+      "seek_delta": 100,
+      "seek_delta_port": 100,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            50414
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        50414,
+        50414,
+        2000,
+        50464,
+        3000
+      ]
+    },
+    "one_pair_single_ending": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            2000,
+            50414
+          ]
+        },
+        {
+          "end": 2.0,
+          "end_pos": 100,
+          "start": 1.0,
+          "start_pos": 50,
+          "tokens": [
+            50414,
+            3000,
+            50464
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        2000,
+        50414,
+        50414,
+        3000,
+        50464
+      ]
+    },
+    "partial_window": {
+      "seek": 0,
+      "seek_delta": 1234,
+      "seek_delta_port": 1234,
+      "segment_size": 1234,
+      "segments": [
+        {
+          "end": 12.34,
+          "end_pos": null,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            1000
+          ]
+        }
+      ],
+      "tokens": [
+        1000
+      ]
+    },
+    "partial_window_with_timestamps": {
+      "seek": 0,
+      "seek_delta": 100,
+      "seek_delta_port": 100,
+      "segment_size": 1234,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            50414
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        50414,
+        50414,
+        2000
+      ]
+    },
+    "single_text_token": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 30.0,
+          "end_pos": null,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            1000
+          ]
+        }
+      ],
+      "tokens": [
+        1000
+      ]
+    },
+    "single_timestamp_token": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50414
+          ]
+        }
+      ],
+      "tokens": [
+        50414
+      ]
+    },
+    "specials_between_eot_and_timestamps": {
+      "seek": 0,
+      "seek_delta": 100,
+      "seek_delta_port": 100,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            50259,
+            1000,
+            50363,
+            50414
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        50259,
+        1000,
+        50363,
+        50414,
+        50414,
+        2000,
+        50257
+      ]
+    },
+    "stall_zero_advance": {
+      "seek": 0,
+      "seek_delta": 0,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 0.0,
+          "end_pos": 0,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        50364,
+        1000
+      ]
+    },
+    "three_consecutive_timestamps": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 0.0,
+          "end_pos": 0,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364
+          ]
+        },
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 1.0,
+          "start_pos": 50,
+          "tokens": [
+            50414
+          ]
+        },
+        {
+          "end": 3.0,
+          "end_pos": 150,
+          "start": 2.0,
+          "start_pos": 100,
+          "tokens": [
+            50464,
+            1000,
+            50514
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        50414,
+        50464,
+        1000,
+        50514
+      ]
+    },
+    "trailing_timestamp_only": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            2000,
+            50414
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        2000,
+        50414
+      ]
+    },
+    "two_pairs": {
+      "seek": 0,
+      "seek_delta": 3000,
+      "seek_delta_port": 3000,
+      "segment_size": 3000,
+      "segments": [
+        {
+          "end": 1.0,
+          "end_pos": 50,
+          "start": 0.0,
+          "start_pos": 0,
+          "tokens": [
+            50364,
+            1000,
+            50414
+          ]
+        },
+        {
+          "end": 2.0,
+          "end_pos": 100,
+          "start": 1.0,
+          "start_pos": 50,
+          "tokens": [
+            50414,
+            2000,
+            50464
+          ]
+        },
+        {
+          "end": 3.0,
+          "end_pos": 150,
+          "start": 2.0,
+          "start_pos": 100,
+          "tokens": [
+            50464,
+            3000,
+            50514
+          ]
+        }
+      ],
+      "tokens": [
+        50364,
+        1000,
+        50414,
+        50414,
+        2000,
+        50464,
+        50464,
+        3000,
+        50514
+      ]
+    }
+  },
+  "text_tokens": {
+    "boundary_ids": {
+      "text_tokens": [
+        50256
+      ],
+      "tokens": [
+        50256,
+        50257,
+        50258
+      ]
+    },
+    "empty": {
+      "text_tokens": [],
+      "tokens": []
+    },
+    "eot_stripped": {
+      "text_tokens": [
+        1000
+      ],
+      "tokens": [
+        1000,
+        50257
+      ]
+    },
+    "language_and_notimestamps_stripped": {
+      "text_tokens": [
+        1000
+      ],
+      "tokens": [
+        50364,
+        50259,
+        1000,
+        50363,
+        50414
+      ]
+    },
+    "text_only": {
+      "text_tokens": [
+        1000,
+        2000
+      ],
+      "tokens": [
+        1000,
+        2000
+      ]
+    },
+    "timestamps_stripped": {
+      "text_tokens": [
+        1000
+      ],
+      "tokens": [
+        50364,
+        1000,
+        50414
+      ]
+    }
+  }
+}
