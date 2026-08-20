@@ -317,22 +317,38 @@ else
   tail -n 20 "$BASELINE_LOG" | sed 's/^/  | /'
 fi
 
+# The isolated run below has to answer "does the binary need a .metallib beside
+# it?", so any metallib the build produced is moved out of the way first. That
+# means this script renames files in the caller's target/ directory, and it must
+# put them back no matter how it exits -- if it does not, the tree is left in
+# exactly the broken state this check is trying to detect, and every subsequent
+# build inherits it.
+#
+# MOVED_METALLIBS is therefore recorded BEFORE the first mv, not after. With
+# `set -e`, a partially-completed move loop aborts the script, and an assignment
+# placed after the loop would never run: restore_metallibs would return early on
+# an empty list and strand the renamed files.
 MOVED_METALLIBS=""
 restore_metallibs() {
   [ -z "$MOVED_METALLIBS" ] && return 0
+  # Never let a restore failure abort the EXIT trap before cleanup runs, and
+  # never let the loop's last iteration decide the trap's exit status.
   echo "$MOVED_METALLIBS" | while IFS= read -r f; do
     [ -z "$f" ] && continue
-    [ -e "${f}.self-contained-check-bak" ] && mv "${f}.self-contained-check-bak" "$f"
+    if [ -e "${f}.self-contained-check-bak" ]; then
+      mv "${f}.self-contained-check-bak" "$f" || echo "  WARNING: could not restore $f" >&2
+    fi
   done
+  return 0
 }
 trap 'restore_metallibs; cleanup' EXIT
 
 if [ -n "$METALLIB_FILES" ]; then
+  MOVED_METALLIBS="$METALLIB_FILES"
   echo "$METALLIB_FILES" | while IFS= read -r f; do
     [ -z "$f" ] && continue
     mv "$f" "${f}.self-contained-check-bak"
   done
-  MOVED_METALLIBS="$METALLIB_FILES"
   info "moved aside $(echo "$METALLIB_FILES" | wc -l | tr -d ' ') .metallib file(s) under target/ for the isolated run"
 fi
 
