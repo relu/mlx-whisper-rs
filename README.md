@@ -330,6 +330,43 @@ including the divergences the current test suite is expected to catch.
 
 ---
 
+## Self-containment check
+
+One argument for this crate over `whisper.cpp` is that it can ship as a
+single self-contained binary. That claim is **unverified** — it has two
+parts, and neither is guaranteed just because the crate builds:
+
+- `mlx-sys` links `mlx`/`mlxc` statically, and everything else it links
+  dynamically (Foundation, Metal, Accelerate, `libc++`, `libobjc`) is a
+  system framework or dylib — but nothing stops a transitive dependency
+  (`zlib`, `ffmpeg` at runtime, anything future) from picking up a Homebrew
+  copy instead of the system one on a given machine.
+- MLX is Metal-backed, and Metal shaders are normally shipped as a compiled
+  `.metallib`. `mlx-sys` builds MLX's Metal backend by default, but how the
+  resulting shader library gets packaged — embedded in the binary, or a
+  loose file the binary expects to find at a path baked in at build time —
+  is decided entirely inside MLX's own CMake, which mlx-sys fetches from
+  GitHub at build time and never vendors. That is not something this repo's
+  source (or `mlx-sys`'s) settles either way; it can only be answered by
+  actually running the binary with nothing beside it.
+
+`scripts/check-self-contained.sh` answers this on a real Apple Silicon Mac.
+It builds `examples/transcribe` in release mode, inspects it with `otool -L`
+(linked libraries) and `otool -l` (LC_RPATH), looks for any `.metallib`
+produced by the build, and — the check that actually matters — copies the
+binary alone into an empty directory and runs it there against a real audio
+file and model with `DYLD_*` unset and Homebrew off `PATH`. Each check
+reports its own PASS/FAIL/INFO rather than stopping at the first problem.
+
+```bash
+./scripts/check-self-contained.sh --audio /path/to/sample.wav
+```
+
+Run this yourself and read its output rather than trusting the feature list
+above — it is written as a question, not a claim.
+
+---
+
 ## Differences from Python `mlx-whisper`
 
 | Feature | Python | This crate |
