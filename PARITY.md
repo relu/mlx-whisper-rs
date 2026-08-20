@@ -438,23 +438,36 @@ tensors are already fp16 on disk in the `mlx-community` repos):
   every attention call. Fixed by casting the scale to the operand's own dtype
   before multiplying.
 
-**Known residual promotion, not fixed here:** `mlx_rs::nn::gelu` (0.25.3,
-`src/nn/activation.rs`'s `compiled_gelu`) divides its input by
-`array!(2f32.sqrt())`, a literal `Dtype::Float32` scalar. That mixes float16
-with float32 the same way the `qkv_attention` scale did, and standard
-promotion takes it to f32 — so `AudioEncoder::forward`'s `gelu(conv1(mel))`
-(the very first op after the first conv) and every `ResidualAttentionBlock`'s
-`gelu(mlp1(...))` re-promote the hidden state to f32 regardless of the dtype
-knob. Unlike the attention scale, this isn't fixable from inside this crate
-without reimplementing `gelu` locally with dtype-matched constants — a
-meaningfully larger change than this fix, and one that would touch
-`AudioEncoder::forward`, which another concurrent change already owns. Net
-effect: `MODEL-3`'s API and buffer-dtype threading are now correct and match
-upstream's structure, but on real fp16 checkpoints the memory/speed win is
-likely **not** fully realised yet — verify empirically with `--fp32` vs the
-default on a Mac; if the two run in near-identical time, that confirms the
-promotion above rather than a regression in this change. Revisit once mlx-rs
-gains weak-scalar typing or this crate special-cases the activation.
+**Second promotion site, also fixed:** `mlx_rs::nn::gelu` (0.25.3,
+`src/nn/activation.rs`'s `compiled_gelu`) computes
+`x * (1 + erf(x / sqrt(2))) / 2` with `array!(2f32.sqrt())` and `array!(2.0)`
+— literal `Dtype::Float32` scalars, mixing float16 with float32 exactly as the
+`qkv_attention` scale did, so the result is f32 whatever the input was. This
+one mattered more than the attention scale: gelu runs immediately after both
+encoder convolutions and inside every `ResidualAttentionBlock`'s MLP, so an
+f32 result re-promotes the activations at the very first layer and then again
+in every block, with the residual add, the following layer norm and the next
+block's matmuls all inheriting f32. Left in place it would have turned the
+whole dtype knob into a no-op while still reporting fp16 weights.
+
+Fixed with a local `gelu_keep_dtype` wrapper in `src/whisper.rs` that casts
+the result back to the input's dtype, used at all three call sites. Upstream
+gets this for free — `mlx.nn.gelu` divides by a plain Python float, which
+stays weak and keeps fp16 throughout. Casting the result is the conservative
+version: the elementwise gelu is evaluated in f32 and rounded afterwards,
+which is marginally *more* accurate than upstream rather than less, and costs
+one elementwise pass while keeping every matmul and convolution downstream in
+fp16. Reimplementing gelu with dtype-matched constants would avoid even that
+pass, but the elementwise cost is negligible next to the convolutions and
+matmuls it protects, and the wrapper is far less risky in a crate that cannot
+be compiled or tested on the development machine.
+
+**Still to verify on Apple Silicon.** Both promotion sites above were found by
+reading mlx-rs source, not by measurement, and no part of this has been run.
+Compare `--fp32` against the default on a Mac: the default should now be
+meaningfully faster and roughly halve resident memory. If the two still run in
+near-identical time, there is a third promotion site that source reading
+missed, and the encoder activations should be dtype-checked layer by layer.
 
 Test call sites (`tests/model_math_parity.rs`, `tests/decoder_cache.rs`) pass
 `Dtype::Float32` explicitly — those suites check integer/offset arithmetic

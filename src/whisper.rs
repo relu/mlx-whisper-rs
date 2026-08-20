@@ -57,6 +57,32 @@ pub fn sinusoids(length: usize, channels: usize) -> Result<Array> {
     Ok(concatenate_axis(&[scaled.sin()?, scaled.cos()?], 1)?)
 }
 
+/// `gelu` that preserves its input's dtype.
+///
+/// `mlx_rs::nn::gelu` computes `x * (1 + erf(x / sqrt(2))) / 2`, but builds the
+/// constants with `array!(2f32.sqrt())` and `array!(2.0)` — genuine
+/// `Dtype::Float32` scalar arrays, not Python's weak scalars. Ordinary type
+/// promotion therefore makes the result f32 no matter what went in, exactly
+/// like the `q * scale` case in `qkv_attention` above.
+///
+/// That matters far more here than it looks. gelu sits immediately after both
+/// encoder convolutions and inside every residual block's MLP, so an f32 result
+/// re-promotes the activations at the very first layer and then again in every
+/// block — the residual add, the following layer norm and the next block's
+/// matmuls all inherit f32. Left alone it would quietly turn the whole dtype
+/// knob (PARITY.md MODEL-3) into a no-op while still reporting fp16 weights.
+///
+/// Upstream computes gelu in the model dtype: `mlx.nn.gelu` divides by a plain
+/// Python float, which stays weak and keeps fp16. Casting the result back is
+/// the conservative version of that — the elementwise gelu itself is evaluated
+/// in f32 and rounded down afterwards, which is slightly *more* accurate than
+/// upstream rather than less, and costs only an elementwise pass while keeping
+/// every matmul and convolution downstream in fp16.
+fn gelu_keep_dtype(x: &Array) -> Result<Array> {
+    let dtype = x.dtype();
+    Ok(mlx_rs::nn::gelu(x)?.as_dtype(dtype)?)
+}
+
 // ── MultiHeadAttention ───────────────────────────────────────────────────────
 
 pub struct MultiHeadAttention {
@@ -230,7 +256,7 @@ impl ResidualAttentionBlock {
 
         // MLP
         let ln_x = self.mlp_ln.forward(&x)?;
-        let hidden = mlx_rs::nn::gelu(&self.mlp1.forward(&ln_x)?)?;
+        let hidden = gelu_keep_dtype(&self.mlp1.forward(&ln_x)?)?;
         let mlp_out = self.mlp2.forward(&hidden)?;
         let x = &x + &mlp_out;
 
@@ -322,8 +348,8 @@ impl AudioEncoder {
             }
         };
 
-        let x = mlx_rs::nn::gelu(&self.conv1.forward(&x)?)?;
-        let mut x = mlx_rs::nn::gelu(&self.conv2.forward(&x)?)?;
+        let x = gelu_keep_dtype(&self.conv1.forward(&x)?)?;
+        let mut x = gelu_keep_dtype(&self.conv2.forward(&x)?)?;
         x = &x + &pos_emb;
         for block in &mut self.blocks {
             let (new_x, _, _) = block.forward(&x, None, None, None)?;
