@@ -359,12 +359,60 @@ bound; `sample_begin`/`sot_index` bookkeeping with a prepended prompt;
 ### MODEL-1 — quantized models are silently mis-loaded — **BUG**
 
 Python (`load_models.py:36-41`) pops `quantization` and calls `nn.quantize(...)`
-before `model.update`. Rust (`src/load_models.rs:308-311`) calls
-`obj.remove("quantization")` and does nothing else. For any
-`mlx-community/whisper-*-4bit` / `-8bit` repo the packed `uint32` `.weight` is
-assigned straight into a dense `Linear` and `.scales`/`.biases` are dropped —
-a shape/dtype failure in `matmul`, or garbage. No `QuantizedLinear` path exists.
-Undocumented.
+before `model.update`, with a `class_predicate` that only converts a
+`Linear`/`Embedding` module when `f"{p}.scales" in weights` — some
+mlx-community repos leave individual layers dense even inside an otherwise-
+quantized model. Rust previously called `obj.remove("quantization")` and
+`bail!`ed with an actionable error instead of mis-loading — safe, but not
+real support.
+
+**Fixed** in this change. mlx-rs's `nn::quantize`/`#[derive(Quantizable)]`
+machinery needs `type Quantized = Self` fixed-point ancestor fields
+(`src/quantization.rs`) that this hand-rolled, no-macro loader doesn't have,
+so rather than pull that in:
+
+* `MultiHeadAttention::query/key/value/out`, `ResidualAttentionBlock::mlp1`/
+  `mlp2` and `TextDecoder::token_embedding` (`src/whisper.rs`) are now
+  `mlx_rs::quantization::MaybeQuantized<Linear>` /
+  `MaybeQuantized<Embedding>` rather than bare `Linear`/`Embedding`.
+  `MaybeQuantized` implements `Module` for both variants, so every
+  `.forward(x)` call site is unchanged; `TextDecoder::forward`'s tied-weights
+  `as_linear` call (not part of `Module`) now matches on the variant
+  explicitly. `AudioEncoder::conv1`/`conv2` stay plain `Conv1d` — upstream's
+  `isinstance(m, (nn.Linear, nn.Embedding))` excludes convolutions from
+  quantization entirely, and `load_conv1d` was left untouched to match.
+* `src/load_models.rs` parses config.json's `quantization` object into a
+  `(group_size, bits)` pair (falling back to `nn.quantize`'s/mlx-rs's own
+  defaults, 64/4, for a missing key) instead of `bail!`ing on it. Every
+  `load_linear`/`load_token_embedding` call now takes that config and
+  reproduces the per-module `class_predicate` exactly: a module is built as
+  `QuantizedLinear`/`QuantizedEmbedding` only when the model has a
+  `quantization` config *and* that specific module's `.scales` key is
+  present in the weights file; every other module stays dense, byte-for-byte
+  the same as before this change.
+* mlx-rs ships no constructor that accepts already-packed weights from disk
+  — every `QuantizedLinear`/`QuantizedEmbedding` constructor it provides
+  re-quantizes a live float `Array` via `ops::quantize`. So the quantized
+  branch builds the struct literal directly from the checkpoint's `.weight`
+  (packed `uint32`), `.scales` and `.biases` tensors; all three types' fields
+  are `pub`, so no builder is needed.
+* Nothing here is cast by `dtype`: the packed `.weight` stays `uint32` (an
+  `.astype` on it would corrupt the packing), and `.scales`/`.biases` keep
+  whatever dtype the checkpoint saved them in (fp16 for the mlx-community
+  4-bit/8-bit repos) — the same "load weights as-is" rule `MODEL-3` documents
+  for every other tensor.
+* Caveat noted at its use site (`load_models::load_token_embedding`):
+  `QuantizedEmbedding`'s `scales`/`biases`/`inner` fields lack the `#[param]`
+  attribute `QuantizedLinear`'s equivalents carry, so they're excluded from
+  `ModuleParameters::parameters()`. Harmless here, since this loader always
+  assigns fields directly rather than walking a generic parameter tree — but
+  worth knowing before building anything (e.g. a generic `update()`/eval-of-
+  parameters path) on top of this code.
+
+Unverified: `mlx_rs::ops::quantized_matmul`'s doc note that it "currently
+only supports 2D inputs with dimensions which are multiples of 32" — true of
+every `n_state`/`n_vocab` in the published mlx-community Whisper configs, but
+not checked at load time here.
 
 ### MODEL-2 — example CLI panics on a value-less flag — **BUG**
 
@@ -411,8 +459,8 @@ tensors are already fp16 on disk in the `mlx-community` repos):
   argument, mirroring how upstream code reads `self.model.dtype`.
 * `load_models::load_model` (`src/load_models.rs:299`) takes a `dtype`
   parameter and forwards it to `Whisper::new`. It still does not cast the
-  loaded weight tensors, matching upstream, and the `quantization` `bail!` is
-  unchanged.
+  loaded weight tensors, matching upstream. (The `quantization` handling
+  mentioned here was later replaced with real support — see `MODEL-1`.)
 * The mel spectrogram is cast to `model.dtype` right before each encoder
   call: in `decoding::decode` (`src/decoding.rs`, mirroring
   `DecodingTask._get_audio_features`'s `mel.astype(mx.float16)`) and in
@@ -790,9 +838,10 @@ fixing rather than documenting:
 
 Two further findings are deliberately **not** fixed:
 
-* **MODEL-1** is *rejected*, not implemented: quantized repos now fail with an
-  actionable error instead of loading garbage. Real support needs
-  `QuantizedLinear` / `QuantizedEmbedding`.
+* **MODEL-1** is *rejected*, not implemented, as of this pass: quantized repos
+  fail with an actionable error instead of loading garbage. (Later
+  implemented with `QuantizedLinear`/`QuantizedEmbedding` — see `MODEL-1`'s
+  section above and "What changed in the quantization pass" below.)
 * **DEC-2** — the monotonicity clause. This port follows `openai/whisper` and
   enforces the constraint that `mlx_whisper` accidentally disabled. Pinned by
   `decoding::tests::timestamp_rules_enforce_monotonic_timestamps`; all three
@@ -910,29 +959,57 @@ above and doesn't get a `MODEL-`/`TR-`/`DEC-` id.
   at the top of this file); needs a Mac timing run before shipping the
   default lower than `dims.n_audio_ctx`.
 
+## What changed in the quantization pass
+
+Replaced `MODEL-1`'s explicit rejection of quantized `config.json`s with real
+support, mirroring upstream's per-module `nn.quantize(..., class_predicate=...)`.
+See `MODEL-1`'s section above for the full writeup; in short:
+
+* `src/whisper.rs`: `MultiHeadAttention`'s four `Linear` fields,
+  `ResidualAttentionBlock::mlp1`/`mlp2`, and `TextDecoder::token_embedding`
+  are now `mlx_rs::quantization::MaybeQuantized<Linear>` /
+  `MaybeQuantized<Embedding>`. `Conv1d` fields are untouched — Whisper's
+  convolutions are never a `nn.quantize` candidate upstream either.
+* `src/load_models.rs`: `load_linear` and the new `load_token_embedding` take
+  a `(group_size, bits)` config and build `QuantizedLinear`/
+  `QuantizedEmbedding` struct literals directly from the checkpoint's packed
+  `.weight`/`.scales`/`.biases` tensors whenever that module's `.scales` key
+  is present; every other module stays dense. `load_model`'s public
+  signature is unchanged — quantization is entirely config-driven, not a new
+  caller-visible knob.
+* Nothing is cast by the `dtype` knob (`MODEL-3`): loaded weights, packed or
+  dense, are applied to the model exactly as read from the checkpoint, same
+  as every other tensor `apply_weights` handles.
+
+**Not done here:** an end-to-end test against a real quantized checkpoint
+(no such fixture exists yet — see "Suggested order of work" item 3) and any
+validation of `quantized_matmul`'s "dimensions must be a multiple of 32"
+constraint at load time.
+
 ## Suggested order of work
 
 Everything on the original ten-item list has shipped, across the initial
 audit-fix commit and the code-review pass above (`DEC-2` was a decision, now
-pinned by fixture, not a fix). What is left is what the findings above still
-mark RISK or DOC and leave open:
+pinned by fixture, not a fix). `MODEL-1` also now has real quantized-model
+support rather than its earlier rejection (see its section above and "What
+changed in the quantization pass" below). What is left is what the findings
+above still mark RISK or DOC and leave open:
 
-1. Real quantized-model support (`MODEL-1` beyond its current rejection) —
-   `QuantizedLinear` / `QuantizedEmbedding`, or leave the explicit error as the
-   permanent answer.
-2. `AUDIO-5`, `AUDIO-6`, `AUDIO-7`, `AUDIO-8` — harden the `.npy` reader and
+1. `AUDIO-5`, `AUDIO-6`, `AUDIO-7`, `AUDIO-8` — harden the `.npy` reader and
    WAV parser (header validation, `EXTENSIBLE`/24-bit formats, sample-rate
    enforcement, the `stft` frame-count underflow).
-3. The remaining `transcribe.rs`/`tokenizer.rs` items — `encode()` accepting
+2. The remaining `transcribe.rs`/`tokenizer.rs` items — `encode()` accepting
    special-token text, `Tokenizer::decode`'s `< eot` vs `< timestamp_begin`
    mismatch, `detect_language`'s mel-padding gap (same root cause as the
    already-fixed `AUDIO-2`), the anti-stall seek guard, the silence-skip
    boundary, `f32` timestamp arithmetic, `split_tokens_on_spaces`, and
    `TOK-3`'s non-deterministic upstream ordering.
-4. A golden test against Python-mlx logits for `whisper-tiny` — the only way
+3. A golden test against Python-mlx logits for `whisper-tiny` — the only way
    to cover the encoder/decoder forward passes and the `transcribe` seek loop,
-   none of which any current test exercises.
-5. GPU coverage on a real Mac — CI only exercises the CPU device
+   none of which any current test exercises. This would also be the way to
+   verify `MODEL-1`'s quantized path end-to-end: nothing today loads a real
+   quantized checkpoint and checks its logits.
+4. GPU coverage on a real Mac — CI only exercises the CPU device
    (`MLX_WHISPER_RS_TEST_CPU`).
 
 `DEC-6` and `MODEL-3` shipped together (see their sections above): the dtype

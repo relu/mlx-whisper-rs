@@ -5,9 +5,36 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Result};
-use mlx_rs::{module::Param, Array, Dtype};
+use mlx_rs::{
+    module::Param,
+    nn::{Embedding, Linear, QuantizedEmbedding, QuantizedLinear},
+    quantization::MaybeQuantized,
+    Array, Dtype,
+};
 
 use crate::whisper::{ModelDimensions, MultiHeadAttention, ResidualAttentionBlock, Whisper};
+
+// ── Quantization ─────────────────────────────────────────────────────────────
+
+/// `(group_size, bits)` parsed from config.json's `quantization` object, or
+/// `None` when the model isn't quantized at all. Threaded through every
+/// loader below so each `Linear`/`Embedding` module can apply upstream's
+/// per-module `class_predicate` (`load_models.py:36-39`):
+///
+/// ```text
+/// class_predicate = (
+///     lambda p, m: isinstance(m, (nn.Linear, nn.Embedding))
+///     and f"{p}.scales" in weights
+/// )
+/// ```
+///
+/// i.e. a module is quantized only when the checkpoint *both* declares a
+/// `quantization` config *and* actually saved that module's `.scales`
+/// tensor — some mlx-community repos leave individual layers dense even
+/// inside an otherwise-quantized model. `Conv1d` is never a candidate:
+/// upstream's `isinstance` check excludes it, and this crate never threads
+/// `quant` into `load_conv1d`.
+type QuantConfig = Option<(i32, i32)>;
 
 // ── HuggingFace path resolution ───────────────────────────────────────────────
 
@@ -184,17 +211,45 @@ fn get_w(weights: &HashMap<String, Array>, key: &str) -> Result<Array> {
         .ok_or_else(|| anyhow!("Missing weight: {key}"))
 }
 
+/// Loads one `Linear` (or, per the `quant` class predicate, `QuantizedLinear`)
+/// module from `weights`.
+///
+/// mlx-rs's own `QuantizedLinear`/`QuantizedEmbedding` constructors all
+/// *re-quantize a live float `Array`* via `ops::quantize` — there is no
+/// constructor that accepts already-packed weights loaded from disk. So
+/// unlike the dense case (which mutated the existing `Linear` in place),
+/// this builds the whole `QuantizedLinear` struct literal directly from the
+/// `.weight` (packed uint32), `.scales` and `.biases` keys and replaces the
+/// `MaybeQuantized` variant wholesale. All of `QuantizedLinear`'s fields are
+/// `pub`, so this needs no builder.
 fn load_linear(
-    linear: &mut mlx_rs::nn::Linear,
+    linear: &mut MaybeQuantized<Linear>,
     weights: &HashMap<String, Array>,
     prefix: &str,
+    quant: QuantConfig,
 ) -> Result<()> {
-    linear.weight = Param::new(get_w(weights, &format!("{prefix}.weight"))?);
-    if let Some(b) = weights.get(&format!("{prefix}.bias")) {
-        linear.bias = Param::new(Some(b.clone()));
-    } else {
-        linear.bias = Param::new(None);
+    let bias = weights.get(&format!("{prefix}.bias")).cloned();
+
+    if let Some((group_size, bits)) = quant {
+        if weights.contains_key(&format!("{prefix}.scales")) {
+            *linear = MaybeQuantized::Quantized(QuantizedLinear {
+                group_size,
+                bits,
+                scales: Param::new(get_w(weights, &format!("{prefix}.scales"))?),
+                biases: Param::new(get_w(weights, &format!("{prefix}.biases"))?),
+                inner: Linear {
+                    weight: Param::new(get_w(weights, &format!("{prefix}.weight"))?),
+                    bias: Param::new(bias),
+                },
+            });
+            return Ok(());
+        }
     }
+
+    *linear = MaybeQuantized::Original(Linear {
+        weight: Param::new(get_w(weights, &format!("{prefix}.weight"))?),
+        bias: Param::new(bias),
+    });
     Ok(())
 }
 
@@ -226,11 +281,12 @@ fn load_mha(
     mha: &mut MultiHeadAttention,
     weights: &HashMap<String, Array>,
     prefix: &str,
+    quant: QuantConfig,
 ) -> Result<()> {
-    load_linear(&mut mha.query, weights, &format!("{prefix}.query"))?;
-    load_linear(&mut mha.key, weights, &format!("{prefix}.key"))?;
-    load_linear(&mut mha.value, weights, &format!("{prefix}.value"))?;
-    load_linear(&mut mha.out, weights, &format!("{prefix}.out"))?;
+    load_linear(&mut mha.query, weights, &format!("{prefix}.query"), quant)?;
+    load_linear(&mut mha.key, weights, &format!("{prefix}.key"), quant)?;
+    load_linear(&mut mha.value, weights, &format!("{prefix}.value"), quant)?;
+    load_linear(&mut mha.out, weights, &format!("{prefix}.out"), quant)?;
     Ok(())
 }
 
@@ -238,12 +294,13 @@ fn load_block(
     block: &mut ResidualAttentionBlock,
     weights: &HashMap<String, Array>,
     prefix: &str,
+    quant: QuantConfig,
 ) -> Result<()> {
-    load_mha(&mut block.attn, weights, &format!("{prefix}.attn"))?;
+    load_mha(&mut block.attn, weights, &format!("{prefix}.attn"), quant)?;
     load_layer_norm(&mut block.attn_ln, weights, &format!("{prefix}.attn_ln"))?;
 
     if let Some(cross_attn) = &mut block.cross_attn {
-        load_mha(cross_attn, weights, &format!("{prefix}.cross_attn"))?;
+        load_mha(cross_attn, weights, &format!("{prefix}.cross_attn"), quant)?;
         load_layer_norm(
             block.cross_attn_ln.as_mut().unwrap(),
             weights,
@@ -251,32 +308,78 @@ fn load_block(
         )?;
     }
 
-    load_linear(&mut block.mlp1, weights, &format!("{prefix}.mlp1"))?;
-    load_linear(&mut block.mlp2, weights, &format!("{prefix}.mlp2"))?;
+    load_linear(&mut block.mlp1, weights, &format!("{prefix}.mlp1"), quant)?;
+    load_linear(&mut block.mlp2, weights, &format!("{prefix}.mlp2"), quant)?;
     load_layer_norm(&mut block.mlp_ln, weights, &format!("{prefix}.mlp_ln"))?;
     Ok(())
 }
 
+/// Loads the decoder's tied token-embedding / output-projection module,
+/// mirroring `load_linear`'s quantized-vs-dense branch (see its doc comment).
+///
+/// Unlike `QuantizedLinear`, mlx-rs's `QuantizedEmbedding` (`nn/quantized.rs`)
+/// does not tag its `scales`/`biases`/`inner` fields with `#[param]`, so
+/// they're excluded from `ModuleParameters::parameters()` — a generic
+/// `update()`/eval-of-parameters walk over the model would silently skip
+/// them. Harmless here: this crate always assigns loaded weights by direct
+/// field access, as below, never through that generic path.
+fn load_token_embedding(
+    embedding: &mut MaybeQuantized<Embedding>,
+    weights: &HashMap<String, Array>,
+    prefix: &str,
+    quant: QuantConfig,
+) -> Result<()> {
+    if let Some((group_size, bits)) = quant {
+        if weights.contains_key(&format!("{prefix}.scales")) {
+            *embedding = MaybeQuantized::Quantized(QuantizedEmbedding {
+                group_size,
+                bits,
+                scales: Param::new(get_w(weights, &format!("{prefix}.scales"))?),
+                biases: Param::new(get_w(weights, &format!("{prefix}.biases"))?),
+                inner: Embedding {
+                    weight: Param::new(get_w(weights, &format!("{prefix}.weight"))?),
+                },
+            });
+            return Ok(());
+        }
+    }
+
+    // Optional, like the original code: if the checkpoint has no dense
+    // weight under this prefix either, leave the random-init default from
+    // `TextDecoder::new` in place.
+    if let Some(w) = weights.get(&format!("{prefix}.weight")) {
+        *embedding = MaybeQuantized::Original(Embedding {
+            weight: Param::new(w.clone()),
+        });
+    }
+    Ok(())
+}
+
 /// Apply weight dict to Whisper model.
-fn apply_weights(model: &mut Whisper, weights: &HashMap<String, Array>) -> Result<()> {
-    // Encoder
+fn apply_weights(model: &mut Whisper, weights: &HashMap<String, Array>, quant: QuantConfig) -> Result<()> {
+    // Encoder. conv1/conv2 are never quantized — upstream's `isinstance(m,
+    // (nn.Linear, nn.Embedding))` class predicate excludes `Conv1d` — so
+    // `load_conv1d` doesn't take `quant` at all.
     load_conv1d(&mut model.encoder.conv1, weights, "encoder.conv1")?;
     load_conv1d(&mut model.encoder.conv2, weights, "encoder.conv2")?;
     load_layer_norm(&mut model.encoder.ln_post, weights, "encoder.ln_post")?;
     for (i, block) in model.encoder.blocks.iter_mut().enumerate() {
-        load_block(block, weights, &format!("encoder.blocks.{i}"))?;
+        load_block(block, weights, &format!("encoder.blocks.{i}"), quant)?;
     }
 
     // Decoder
-    if let Some(te_w) = weights.get("decoder.token_embedding.weight") {
-        model.decoder.token_embedding.weight = Param::new(te_w.clone());
-    }
+    load_token_embedding(
+        &mut model.decoder.token_embedding,
+        weights,
+        "decoder.token_embedding",
+        quant,
+    )?;
     if let Some(pe) = weights.get("decoder.positional_embedding") {
         model.decoder.positional_embedding = pe.clone();
     }
     load_layer_norm(&mut model.decoder.ln, weights, "decoder.ln")?;
     for (i, block) in model.decoder.blocks.iter_mut().enumerate() {
-        load_block(block, weights, &format!("decoder.blocks.{i}"))?;
+        load_block(block, weights, &format!("decoder.blocks.{i}"), quant)?;
     }
 
     // alignment_heads (optional, overrides the default)
@@ -318,19 +421,30 @@ pub fn load_model(path_or_hf_repo: &str, dtype: Dtype) -> Result<Whisper> {
         .map_err(|e| anyhow!("Failed to read config.json: {e}"))?;
     let mut config: serde_json::Value = serde_json::from_str(&config_str)?;
     // Remove fields not in ModelDimensions
+    let mut quant: QuantConfig = None;
     if let Some(obj) = config.as_object_mut() {
         obj.remove("model_type");
-        // Upstream calls `nn.quantize(model, **quantization)` before applying
-        // weights. There is no QuantizedLinear/QuantizedEmbedding path here, so
-        // dropping the config and loading anyway would assign packed uint32
-        // `.weight` tensors into dense Linear layers and discard `.scales` /
-        // `.biases` — a shape/dtype failure at best, silent garbage at worst.
-        // Fail with something a user can act on instead.
+        // Upstream: `quantization = config.pop("quantization", None)`, then
+        // (after weights are loaded) `nn.quantize(model, **quantization,
+        // class_predicate=...)`. The dict is normally `{"group_size": ...,
+        // "bits": ...}`; fall back to the same defaults `nn.quantize` and
+        // mlx-rs's own `QuantizedLinear`/`QuantizedEmbedding` use if either
+        // key is missing. Which modules actually get quantized is decided
+        // per-module in `load_linear`/`load_token_embedding`, based on
+        // whether the checkpoint saved that module's `.scales` tensor — see
+        // `QuantConfig`'s doc comment.
         if let Some(q) = obj.remove("quantization") {
-            bail!(
-                "{path_or_hf_repo} is a quantized MLX model ({q}), which this crate does not \
-                 support yet. Use an unquantized repo, e.g. mlx-community/whisper-large-v3-turbo."
-            );
+            let group_size = q
+                .get("group_size")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32)
+                .unwrap_or(QuantizedLinear::DEFAULT_GROUP_SIZE);
+            let bits = q
+                .get("bits")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32)
+                .unwrap_or(QuantizedLinear::DEFAULT_BITS);
+            quant = Some((group_size, bits));
         }
     }
     let dims: ModelDimensions = serde_json::from_value(config)?;
@@ -340,7 +454,7 @@ pub fn load_model(path_or_hf_repo: &str, dtype: Dtype) -> Result<Whisper> {
 
     // Load and apply weights
     let weights = load_weights(&model_path)?;
-    apply_weights(&mut model, &weights)?;
+    apply_weights(&mut model, &weights, quant)?;
 
     // Force evaluation of key arrays
     mlx_rs::transforms::eval([&model.encoder.positional_embedding])?;

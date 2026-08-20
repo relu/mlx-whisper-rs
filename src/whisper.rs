@@ -11,6 +11,7 @@ use mlx_rs::{
          MultiHeadAttention as MHAnn},
     ops::{add, arange, concatenate_axis, matmul, softmax_axis, zeros},
     ops::indexing::IndexOp,
+    quantization::MaybeQuantized,
 };
 
 // ── Type aliases ─────────────────────────────────────────────────────────────
@@ -87,10 +88,18 @@ fn gelu_keep_dtype(x: &Array) -> Result<Array> {
 
 pub struct MultiHeadAttention {
     pub n_head: usize,
-    pub query: Linear,
-    pub key: Linear,   // no bias
-    pub value: Linear,
-    pub out: Linear,
+    // `MaybeQuantized<Linear>` rather than `Linear`: upstream's `nn.quantize`
+    // (load_models.py:36-41) replaces individual `Linear`/`Embedding`
+    // submodules with their quantized counterpart, per-module, based on
+    // whether that module's weights were actually saved packed (see
+    // `load_models::load_linear`). `MaybeQuantized` implements `Module` for
+    // both variants, so every `.forward(x)` call below is unchanged either
+    // way; only `TextDecoder::forward`'s `as_linear` call (no `Module`
+    // equivalent) needs to match on the variant explicitly.
+    pub query: MaybeQuantized<Linear>,
+    pub key: MaybeQuantized<Linear>,   // no bias
+    pub value: MaybeQuantized<Linear>,
+    pub out: MaybeQuantized<Linear>,
 }
 
 impl MultiHeadAttention {
@@ -98,10 +107,10 @@ impl MultiHeadAttention {
         let n = n_state as i32;
         Ok(Self {
             n_head,
-            query: Linear::new(n, n)?,
-            key: LinearBuilder::new(n, n).bias(false).build()?,
-            value: Linear::new(n, n)?,
-            out: Linear::new(n, n)?,
+            query: MaybeQuantized::new(Linear::new(n, n)?),
+            key: MaybeQuantized::new(LinearBuilder::new(n, n).bias(false).build()?),
+            value: MaybeQuantized::new(Linear::new(n, n)?),
+            out: MaybeQuantized::new(Linear::new(n, n)?),
         })
     }
 
@@ -201,8 +210,8 @@ pub struct ResidualAttentionBlock {
     pub attn_ln: LayerNorm,
     pub cross_attn: Option<MultiHeadAttention>,
     pub cross_attn_ln: Option<LayerNorm>,
-    pub mlp1: Linear,
-    pub mlp2: Linear,
+    pub mlp1: MaybeQuantized<Linear>,
+    pub mlp2: MaybeQuantized<Linear>,
     pub mlp_ln: LayerNorm,
 }
 
@@ -223,8 +232,8 @@ impl ResidualAttentionBlock {
             attn_ln: LayerNorm::new(n)?,
             cross_attn,
             cross_attn_ln,
-            mlp1: Linear::new(n, n_mlp)?,
-            mlp2: Linear::new(n_mlp, n)?,
+            mlp1: MaybeQuantized::new(Linear::new(n, n_mlp)?),
+            mlp2: MaybeQuantized::new(Linear::new(n_mlp, n)?),
             mlp_ln: LayerNorm::new(n)?,
         })
     }
@@ -362,7 +371,11 @@ impl AudioEncoder {
 // ── TextDecoder ───────────────────────────────────────────────────────────────
 
 pub struct TextDecoder {
-    pub token_embedding: Embedding,
+    // See the comment on `MultiHeadAttention`'s fields — quantized per-module
+    // based on the checkpoint, mirroring `nn.quantize`'s `class_predicate`.
+    // Also used tied as the output projection (`as_linear`, below), which
+    // `MaybeQuantized` does not forward automatically.
+    pub token_embedding: MaybeQuantized<Embedding>,
     pub positional_embedding: Array,
     pub blocks: Vec<ResidualAttentionBlock>,
     pub ln: LayerNorm,
@@ -382,7 +395,7 @@ impl TextDecoder {
         let nc = n_ctx as i32;
         let ns = n_state as i32;
         Ok(Self {
-            token_embedding: Embedding::new(nv, ns)?,
+            token_embedding: MaybeQuantized::new(Embedding::new(nv, ns)?),
             // Left as f32 zeros, uncast: this is a real learned parameter, not a
             // computed buffer, so `load_models::apply_weights` overwrites it
             // wholesale with the (already fp16-on-disk) loaded tensor. Upstream
@@ -452,7 +465,14 @@ impl TextDecoder {
         }
 
         let x = self.ln.forward(&x)?;
-        let logits = self.token_embedding.as_linear(&x)?;
+        // `MaybeQuantized` forwards `Module::forward` for both variants (used
+        // above and throughout this file), but `as_linear` isn't part of
+        // `Module` — `Embedding` and `QuantizedEmbedding` each expose it
+        // directly, so the tied-weights output projection has to match.
+        let logits = match &self.token_embedding {
+            MaybeQuantized::Original(emb) => emb.as_linear(&x),
+            MaybeQuantized::Quantized(qemb) => qemb.as_linear(&x),
+        }?;
         Ok((logits, caches, cross_qks))
     }
 }
