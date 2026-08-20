@@ -30,6 +30,14 @@ pub struct DecodingOptions {
     pub max_initial_timestamp: Option<f32>,
     /// Previous context token IDs; prepended as prompt before the SOT sequence
     pub prompt: Option<Vec<u32>>,
+    /// Override the encoder context length (whisper.cpp's `-ac` / `audio_ctx`).
+    /// `None` encodes the model's full `dims.n_audio_ctx` — today's behaviour.
+    /// `Some(n)` truncates the encoder to `n` positions, cutting encoder
+    /// latency on short audio at some accuracy cost. See
+    /// `AudioEncoder::forward` for the exact truncation semantics; this does
+    /// *not* change the `n_audio_ctx`-derived timestamp precision below, which
+    /// stays tied to the model's fixed timestamp-token granularity.
+    pub audio_ctx: Option<usize>,
 }
 
 impl Default for DecodingOptions {
@@ -44,6 +52,7 @@ impl Default for DecodingOptions {
             without_timestamps: false,
             max_initial_timestamp: Some(1.0),
             prompt: None,
+            audio_ctx: None,
         }
     }
 }
@@ -301,7 +310,8 @@ pub fn decode(
     } else {
         mel.clone()
     };
-    let audio_features = model.encoder.forward(&mel_batch)?; // [1, n_audio_ctx, n_audio_state]
+    // [1, audio_ctx.unwrap_or(n_audio_ctx), n_audio_state]
+    let audio_features = model.encoder.forward(&mel_batch, options.audio_ctx)?;
 
     // ── Initial token sequence ──────────────────────────────────────────────
     let mut sot_seq = tokenizer.sot_sequence.clone();
@@ -347,6 +357,12 @@ pub fn decode(
             .map(|ids| Array::from_slice(&build_mask(&ids, n_vocab), &[n_vocab as i32]));
 
     // max_initial_timestamp_index: how many 0.02s steps the initial timestamp may be
+    //
+    // NB: deliberately uses `n_audio_ctx` (model.dims.n_audio_ctx), not
+    // `options.audio_ctx`. Timestamp tokens have fixed granularity tied to the
+    // model's trained vocabulary (30s window / n_audio_ctx positions); an
+    // `audio_ctx` override changes how much of that window the encoder
+    // actually computes, not the meaning of a timestamp token.
     //
     // `filter(|&t| t != 0.0)`: upstream guards with `if
     // self.options.max_initial_timestamp:`, where `0.0` is falsy and therefore

@@ -9,6 +9,8 @@
 ///   --task   <transcribe|translate>  default: transcribe
 ///   --assets <dir>                default: ./assets
 ///   --verbose                     print segments as they are decoded
+///   --audio-ctx <N>               truncate encoder context to N positions (whisper.cpp -ac);
+///                                 default: full context
 ///
 /// Prerequisites:
 ///   • ffmpeg must be installed (brew install ffmpeg)
@@ -43,6 +45,7 @@ fn main() -> anyhow::Result<()> {
     let mut task = "transcribe".to_string();
     let mut assets_dir = PathBuf::from("assets");
     let mut verbose = false;
+    let mut audio_ctx: Option<usize> = None;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -62,6 +65,12 @@ fn main() -> anyhow::Result<()> {
             "--task" => task = take_value(&mut i)?,
             "--assets" => assets_dir = PathBuf::from(take_value(&mut i)?),
             "--verbose" | "-v" => verbose = true,
+            "--audio-ctx" => {
+                let v = take_value(&mut i)?;
+                audio_ctx = Some(v.parse().map_err(|_| {
+                    anyhow::anyhow!("--audio-ctx expects a positive integer, got {v:?}")
+                })?);
+            }
             // Anything that does not start with `-` is the positional audio
             // file. Matching on `!starts_with("--")` instead used to swallow a
             // mistyped short flag (`-x`) as the audio file, so the *real* file
@@ -81,7 +90,7 @@ fn main() -> anyhow::Result<()> {
         anyhow::anyhow!(
             "Audio file required\n\n\
              usage: transcribe <audio> [--model ID] [--language CODE] [--task transcribe|translate] \
-             [--assets DIR] [--verbose]"
+             [--assets DIR] [--verbose] [--audio-ctx N]"
         )
     })?;
 
@@ -123,6 +132,7 @@ fn main() -> anyhow::Result<()> {
         language,
         task,
         verbose,
+        audio_ctx,
         ..Default::default()
     };
 
@@ -215,6 +225,7 @@ fn print_help() {
            --task   <task>         transcribe or translate          [transcribe]\n\
            --assets <dir>          Directory with *.tiktoken files  [./assets]\n\
            --verbose, -v           Print segments as decoded\n\
+           --audio-ctx <N>         Truncate encoder context to N positions (whisper.cpp -ac)  [full]\n\
            --help,   -h            Show this message\n\
          \n\
          Prerequisites:\n\

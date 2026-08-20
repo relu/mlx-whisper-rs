@@ -58,6 +58,20 @@ pub struct TranscribeOptions {
     pub without_timestamps: bool,
     /// Print decoded text to stderr as it is produced
     pub verbose: bool,
+    /// Override the encoder context length, mirroring whisper.cpp's `-ac` /
+    /// `audio_ctx` flag. Whisper always encodes a full padded 30-second window
+    /// regardless of how much of it is real audio, so a short utterance pays
+    /// the same encoder cost as a full one; this truncates the encoder to `n`
+    /// positions, cutting that cost at some accuracy price (the model was
+    /// trained to see the full window, so attending over a truncated one is
+    /// off-distribution).
+    ///
+    /// `None` (default) preserves today's behaviour exactly. `Some(n)` must
+    /// satisfy `1 <= n <= dims.n_audio_ctx`; anything else is a clear error
+    /// from `AudioEncoder::forward` rather than a panic. This does not change
+    /// the 30-second sliding-window/seek chunking or the timestamp arithmetic
+    /// — only how much of each window's mel the encoder attends to.
+    pub audio_ctx: Option<usize>,
 }
 
 impl Default for TranscribeOptions {
@@ -75,6 +89,7 @@ impl Default for TranscribeOptions {
             suppress_tokens: Some("-1".to_string()),
             without_timestamps: false,
             verbose: false,
+            audio_ctx: None,
         }
     }
 }
@@ -113,7 +128,10 @@ pub fn detect_language(
         d => anyhow::bail!("mel must be 2-D or 3-D, got {d}-D"),
     };
 
-    let audio_features = model.encoder.forward(&mel_batch)?;
+    // Always encode the full context here: language ID benefits from as much
+    // audio as is available, and this is unrelated to the caller-settable
+    // `TranscribeOptions::audio_ctx` override used by the main decode loop.
+    let audio_features = model.encoder.forward(&mel_batch, None)?;
     let num_langs = model.num_languages();
     let bare_tok = get_tokenizer(model.is_multilingual(), num_langs, None, None, assets_dir)?;
 
@@ -526,6 +544,7 @@ pub fn transcribe(
         without_timestamps: options.without_timestamps,
         max_initial_timestamp: Some(1.0),
         prompt: None, // filled per-window below
+        audio_ctx: options.audio_ctx,
         ..Default::default()
     };
 

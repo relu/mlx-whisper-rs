@@ -772,6 +772,55 @@ it needs no download. What is still model-only is the surrounding orchestration:
 the prompt buffer, `prompt_reset_since`, blank-segment clearing, and the
 encoder/decoder numerics themselves.
 
+## What changed in the audio_ctx pass
+
+Added a caller-settable encoder context length — whisper.cpp's `-ac` /
+`audio_ctx` flag, ported over. Upstream `mlx_whisper` has **no** equivalent
+knob, so this is a deliberate addition, not a parity fix; it isn't a finding
+above and doesn't get a `MODEL-`/`TR-`/`DEC-` id.
+
+* **Motivation:** Whisper always encodes a full padded 30-second window
+  regardless of how much of it is real audio, so a 5-second utterance costs
+  the same encoder pass as a 30-second one.
+* **API:** `TranscribeOptions::audio_ctx` and `DecodingOptions::audio_ctx`
+  (both `Option<usize>`, default `None`) plumb an override down to
+  `AudioEncoder::forward` (`src/whisper.rs`). `None` reproduces today's
+  behaviour byte-for-byte — the full `dims.n_audio_ctx` positions are
+  computed, unchanged.
+* **Where the truncation happens:** `Some(n)` slices the *mel input* to
+  `2*n` frames before `conv1`, rather than running the full conv stack and
+  truncating the post-conv activations. `conv1` (stride 1) preserves the
+  frame count and `conv2` (stride 2) halves it, so `n` encoder positions
+  need exactly `2*n` mel frames in; slicing upstream of both convs skips
+  their work on the discarded frames instead of computing and discarding
+  it. `positional_embedding` is sliced to the same `n` rows.
+  `n` must be in `1..=dims.n_audio_ctx`; out of range is a clear `Err` from
+  `AudioEncoder::forward`, not a panic or an opaque mlx broadcast error.
+* **Left untouched:** the 30-second sliding-window/seek chunking and
+  timestamp math in `transcribe.rs` (`N_SAMPLES`, `N_FRAMES`,
+  `content_frames`, `input_stride`/`time_precision`) and `decoding.rs`'s
+  `max_initial_timestamp_index` precision — both stay tied to the model's
+  fixed `dims.n_audio_ctx`, since timestamp-token granularity is part of the
+  trained vocabulary, not a function of how much the encoder actually
+  computed. `detect_language` also always encodes the full context —
+  language ID benefits from the whole window and this knob is only meant
+  for the per-window transcription decode.
+* **Cross-attention:** confirmed the decoder's cross-attention
+  (`MultiHeadAttention::qkv_attention` in `src/whisper.rs`) already sizes
+  itself off the encoder output's actual shape (`k.shape()[1]`) rather than
+  assuming `dims.n_audio_ctx`, so a shorter encoder output flows through
+  with no code change needed there.
+* **Exposed on the example CLI** as `--audio-ctx <N>`
+  (`examples/transcribe.rs`), bounds-checked against a missing value.
+* **Accuracy caveat:** the model was trained to attend over the full
+  30-second window, so cross-attention over a truncated encoder output is
+  off-distribution — expect degraded transcription accuracy as `n` shrinks,
+  traded for lower encoder latency on short segments. This mirrors the same
+  trade-off whisper.cpp documents for `-ac`. Not yet measured on real audio
+  on this machine (Linux, can't build/run — see the verification-status note
+  at the top of this file); needs a Mac timing run before shipping the
+  default lower than `dims.n_audio_ctx`.
+
 ## Suggested order of work
 
 Everything on the original ten-item list has shipped, across the initial

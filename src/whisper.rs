@@ -258,10 +258,55 @@ impl AudioEncoder {
     }
 
     /// Input x: [batch, n_frames, n_mels] (channels-last, as expected by mlx Conv1d)
-    pub fn forward(&mut self, x: &Array) -> Result<Array> {
-        let x = mlx_rs::nn::gelu(&self.conv1.forward(x)?)?;
+    ///
+    /// `audio_ctx` is an optional caller override for the encoder context
+    /// length, mirroring whisper.cpp's `-ac` / `audio_ctx` flag. Whisper
+    /// always encodes a full padded 30-second window, so on short audio
+    /// most of the encoder's work is spent on silence padding; truncating
+    /// the context cuts that wasted work at some accuracy cost.
+    ///
+    /// `None` reproduces today's behaviour exactly, byte-for-byte: the full
+    /// `positional_embedding` table is added, with no extra checks on this
+    /// path.
+    ///
+    /// `Some(n)` truncates the *mel input* to `2*n` frames before conv1,
+    /// rather than running the full conv stack and truncating the
+    /// post-conv activations: conv1 (stride 1) preserves the frame count
+    /// and conv2 (stride 2) halves it, so slicing upstream of both convs
+    /// skips the conv work on the discarded frames instead of computing it
+    /// and throwing it away afterwards. `n` must be in `1..=n_audio_ctx`
+    /// (the model's configured `dims.n_audio_ctx`, i.e.
+    /// `positional_embedding`'s row count); anything else is a clear `Err`
+    /// rather than a panic or an opaque mlx broadcast error.
+    pub fn forward(&mut self, x: &Array, audio_ctx: Option<usize>) -> Result<Array> {
+        let n_audio_ctx = self.positional_embedding.shape()[0] as usize;
+
+        let (x, pos_emb): (Array, Array) = match audio_ctx {
+            None => (x.clone(), self.positional_embedding.clone()),
+            Some(n) => {
+                if n == 0 || n > n_audio_ctx {
+                    anyhow::bail!(
+                        "audio_ctx override ({n}) out of range: must be in 1..={n_audio_ctx} \
+                         (this model's dims.n_audio_ctx)"
+                    );
+                }
+                let mel_frames_needed = (2 * n) as i32;
+                let total_mel_frames = x.shape()[1];
+                if mel_frames_needed > total_mel_frames {
+                    anyhow::bail!(
+                        "audio_ctx override ({n}) needs {mel_frames_needed} mel frames, \
+                         but the input only has {total_mel_frames}"
+                    );
+                }
+                let mel = x.index((.., ..mel_frames_needed, ..));
+                let pos = self.positional_embedding.index((..n as i32, ..));
+                (mel, pos)
+            }
+        };
+
+        let x = mlx_rs::nn::gelu(&self.conv1.forward(&x)?)?;
         let mut x = mlx_rs::nn::gelu(&self.conv2.forward(&x)?)?;
-        x = &x + &self.positional_embedding;
+        x = &x + &pos_emb;
         for block in &mut self.blocks {
             let (new_x, _, _) = block.forward(&x, None, None, None)?;
             x = new_x;
@@ -398,7 +443,7 @@ impl Whisper {
     }
 
     pub fn embed_audio(&mut self, mel: &Array) -> Result<Array> {
-        self.encoder.forward(mel)
+        self.encoder.forward(mel, None)
     }
 
     pub fn logits(&mut self, tokens: &Array, audio_features: &Array) -> Result<Array> {
@@ -407,7 +452,7 @@ impl Whisper {
     }
 
     pub fn call(&mut self, mel: &Array, tokens: &Array) -> Result<Array> {
-        let audio = self.encoder.forward(mel)?;
+        let audio = self.encoder.forward(mel, None)?;
         let (logits, _, _) = self.decoder.forward(tokens, &audio, None)?;
         Ok(logits)
     }

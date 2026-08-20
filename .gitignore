@@ -7,3 +7,6 @@
 # Python bytecode from tools/
 __pycache__/
 *.pyc
+
+# Scratch worktrees created for background agents; never part of the tree.
+.claude/worktrees/
