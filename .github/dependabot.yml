@@ -1,0 +1,35 @@
+version: 2
+
+updates:
+  # Actions are pinned to commit SHAs in the workflow, which is only safe if
+  # something moves them forward — a pinned SHA never picks up a security fix
+  # on its own. Dependabot rewrites both the SHA and its trailing version
+  # comment, so the pin stays readable.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # These are three uses of two actions with no inputs beyond path/key.
+      # One PR a week is easier to review than three.
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Every bump changes Cargo.lock, and the CI cache key hashes Cargo.lock, so
+    # each PR rebuilds MLX from source — about six minutes. Grouping the
+    # routine bumps keeps that to one rebuild a week rather than one per crate.
+    groups:
+      cargo-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # mlx-rs is not an ordinary dependency: it decides which MLX gets
+      # cmake-built from source, and its API is what `src/whisper.rs` and
+      # `src/decoding.rs` are written against. A major bump there is a porting
+      # task with real parity risk, not something to merge from a green tick.
+      - dependency-name: mlx-rs
+        update-types: ["version-update:semver-major"]

@@ -33,8 +33,13 @@ jobs:
     # runs hit the cache.
     timeout-minutes: 90
 
+    # Actions are pinned to full commit SHAs, not tags. A tag is mutable:
+    # whoever controls the action's repo can repoint `v7` at new code, which
+    # would run with this workflow's token without any change here. The
+    # trailing comment records the human-readable version, and dependabot
+    # (.github/dependabot.yml) keeps both halves in step.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Show toolchain
         run: |
@@ -46,7 +51,7 @@ jobs:
           xcodebuild -version || true
 
       - name: Cache cargo registry and git checkouts
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -65,7 +70,7 @@ jobs:
       # with Clang 21 — a stale-artifact link failure that would look like a
       # code problem. Bump the label here whenever `runs-on` moves.
       - name: Cache build directory (contains the compiled MLX)
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
           key: macos-26-arm64-target-${{ hashFiles('**/Cargo.lock') }}
