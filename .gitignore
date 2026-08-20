@@ -1,2 +1,9 @@
 /target
+
+# Populated by `python3 tools/extract_assets.py` — the tokenizer vocabularies
+# are ~1.6 MB and are redistributable but not worth committing.
 /assets
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc

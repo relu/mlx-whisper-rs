@@ -1,0 +1,41 @@
+mlx-whisper-rs
+Copyright 2026 Chris Liu <chrisliuqq@gmail.com>
+Copyright 2026 Aurel Canciu <aurelcanciu@gmail.com>
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+--------------------------------------------------------------------------------
+Third-party attributions
+--------------------------------------------------------------------------------
+
+This software is a Rust port of the `whisper` example from mlx-examples:
+
+    https://github.com/ml-explore/mlx-examples/tree/main/whisper
+    Copyright (c) 2023 Apple Inc.
+    MIT License
+
+which is in turn derived from OpenAI's Whisper reference implementation:
+
+    https://github.com/openai/whisper
+    Copyright (c) 2022 OpenAI
+    MIT License
+
+The `assets/` directory, when populated as described in the README, contains
+tokenizer vocabularies (`*.tiktoken`) and mel filterbank matrices (`*.npy`)
+that originate from those two projects and remain under the MIT License.
+
+This software links against MLX and mlx-c:
+
+    https://github.com/ml-explore/mlx
+    https://github.com/ml-explore/mlx-c
+    Copyright (c) 2023 Apple Inc.
+    MIT License
+
+via the `mlx-rs` Rust bindings:
+
+    https://github.com/oxideai/mlx-rs
+    Licensed under MIT OR Apache-2.0
+
+The MIT License permits redistribution of the above under the terms of the
+Apache License, Version 2.0, provided the original copyright notices and
+permission notices are retained — which is the purpose of this file.

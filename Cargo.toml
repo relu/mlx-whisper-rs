@@ -3,7 +3,10 @@ name = "mlx-whisper-rs"
 version = "0.1.0"
 edition = "2024"
 description = "MLX-accelerated Whisper speech recognition for Apple Silicon"
-license = "MIT"
+authors = ["Chris Liu <chrisliuqq@gmail.com>", "Aurel Canciu <aurelcanciu@gmail.com>"]
+repository = "https://github.com/relu/mlx-whisper-rs"
+readme = "README.md"
+license = "Apache-2.0"
 
 [dependencies]
 mlx-rs = "0.25"

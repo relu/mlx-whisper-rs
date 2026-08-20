@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    # Apple Silicon. mlx-sys links Foundation/objc/Metal/Accelerate
+    # unconditionally, so this crate cannot build anywhere else.
+    runs-on: macos-14
+    # The first build compiles MLX from source: mlx-sys cmake-builds its
+    # vendored mlx-c with MLX_C_USE_SYSTEM_MLX=OFF, which makes CMake clone
+    # ml-explore/mlx v0.25.1 and build it in-tree. Budget accordingly; later
+    # runs hit the cache.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          echo "arch: $(uname -m)"
+          sw_vers
+          cmake --version
+          rustc --version
+          cargo --version
+          xcodebuild -version || true
+
+      - name: Cache cargo registry and git checkouts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-arm64-cargo-
+
+      # The compiled MLX lives in target/**/build/mlx-sys-*/out, so caching
+      # target/ is what actually saves the 10-20 minute rebuild. Keyed on
+      # Cargo.lock so a dependency bump invalidates it.
+      - name: Cache build directory (contains the compiled MLX)
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-arm64-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-arm64-target-
+
+      # The single most important signal: does the crate, and do the tests,
+      # actually compile? Separated from the test run so a compile failure is
+      # never confused with a test failure.
+      - name: Build library and examples
+        run: cargo build --verbose --lib --examples
+
+      - name: Build tests (compile only)
+        run: cargo test --no-run --verbose
+
+      - name: Populate tokenizer assets
+        run: |
+          python3 -m pip install --user --quiet --break-system-packages numpy
+          python3 tools/extract_assets.py --version 0.4.3
+          ls -la assets/
+
+      - name: Report Metal availability
+        # GitHub's macOS runners are VMs; if Metal is unavailable the tests
+        # will say so here rather than failing with an opaque MLX error.
+        run: |
+          system_profiler SPDisplaysDataType 2>/dev/null | head -20 || true
+
+      - name: Run tests
+        # Several tests are EXPECTED to fail until the findings in PARITY.md
+        # are fixed — see the expected-fail table there. This step is allowed
+        # to fail so the summary below always renders; the build steps above
+        # are the gating signal.
+        continue-on-error: true
+        id: tests
+        run: cargo test --verbose -- --nocapture
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "## Result"
+            echo ""
+            echo "- build (lib + examples): **${{ job.status }}**"
+            echo "- tests: **${{ steps.tests.outcome }}**"
+            echo ""
+            echo "See [PARITY.md](../blob/${{ github.sha }}/PARITY.md) for the"
+            echo "list of tests expected to fail before the fixes land."
+          } >> "$GITHUB_STEP_SUMMARY"

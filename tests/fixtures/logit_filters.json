@@ -1,0 +1,626 @@
+{
+  "eot": 50257,
+  "lcg_note": "state: u64 = seed; repeat: state = state*6364136223846793005 + 1442695040888963407 (wrapping); value = ((state >> 40) as f32 / 2^24) * 16.0 - 8.0. Fill row-major over [2, n_vocab].",
+  "lcg_seed": 12345,
+  "n_vocab": 51866,
+  "no_timestamps": 50363,
+  "row_labels": [
+    "text_dominant",
+    "ts_dominant"
+  ],
+  "row_shift_note": "after filling: row 0 gets -12.0 added to indices >= timestamp_begin; row 1 gets +6.0 added to indices >= timestamp_begin.",
+  "sample_begin": 3,
+  "suppress_blank": {
+    "applies_only_when_len_tokens_eq_sample_begin": true,
+    "suppressed_tokens": [
+      220,
+      50257
+    ]
+  },
+  "suppress_tokens": {
+    "empty": [
+      50258,
+      50358,
+      50359,
+      50360,
+      50361,
+      50362
+    ],
+    "explicit_list": [
+      1,
+      2,
+      3,
+      50258,
+      50358,
+      50359,
+      50360,
+      50361,
+      50362
+    ],
+    "sentinel_minus1": [
+      1,
+      2,
+      7,
+      8,
+      9,
+      10,
+      14,
+      25,
+      26,
+      27,
+      28,
+      29,
+      31,
+      58,
+      59,
+      60,
+      61,
+      62,
+      63,
+      90,
+      91,
+      92,
+      93,
+      359,
+      503,
+      522,
+      542,
+      873,
+      893,
+      902,
+      918,
+      922,
+      931,
+      1350,
+      1853,
+      1982,
+      2460,
+      2627,
+      3246,
+      3253,
+      3268,
+      3536,
+      3846,
+      3961,
+      4183,
+      4667,
+      6585,
+      6647,
+      7273,
+      9061,
+      9383,
+      10428,
+      10929,
+      11938,
+      12033,
+      12331,
+      12562,
+      13793,
+      14157,
+      14635,
+      15265,
+      15618,
+      16553,
+      16604,
+      18362,
+      18956,
+      20075,
+      21675,
+      22520,
+      26130,
+      26161,
+      26435,
+      28279,
+      29464,
+      31650,
+      32302,
+      32470,
+      36865,
+      42863,
+      47425,
+      49870,
+      50254,
+      50258,
+      50358,
+      50359,
+      50360,
+      50361,
+      50362
+    ]
+  },
+  "timestamp_begin": 50364,
+  "timestamp_rules": {
+    "after_paired_timestamps": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 1608,
+          "finite_sum": -17824.47501373291,
+          "label": "text_dominant",
+          "n_suppressed": 50258,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              0,
+              50256
+            ],
+            [
+              50363,
+              50363
+            ]
+          ]
+        },
+        {
+          "finite_count": 1502,
+          "finite_sum": 8980.888619422913,
+          "label": "ts_dominant",
+          "n_suppressed": 50364,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50374,
+        7751,
+        50394
+      ]
+    },
+    "after_single_timestamp": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 50363,
+          "finite_sum": -479.52187156677246,
+          "label": "text_dominant",
+          "n_suppressed": 1503,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              50363,
+              51865
+            ]
+          ]
+        },
+        {
+          "finite_count": 0,
+          "finite_sum": 0.0,
+          "label": "ts_dominant",
+          "n_suppressed": 51866,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              51865
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50374
+      ]
+    },
+    "initial_cap_50": {
+      "max_initial_timestamp_index": 50,
+      "rows": [
+        {
+          "finite_count": 51,
+          "finite_sum": -627.4983892440796,
+          "label": "text_dominant",
+          "n_suppressed": 51815,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ],
+            [
+              50415,
+              51865
+            ]
+          ]
+        },
+        {
+          "finite_count": 51,
+          "finite_sum": 319.2150716781616,
+          "label": "ts_dominant",
+          "n_suppressed": 51815,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ],
+            [
+              50415,
+              51865
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359
+      ]
+    },
+    "initial_no_cap": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 1502,
+          "finite_sum": -17853.872077941895,
+          "label": "text_dominant",
+          "n_suppressed": 50364,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        },
+        {
+          "finite_count": 1502,
+          "finite_sum": 8980.888619422913,
+          "label": "ts_dominant",
+          "n_suppressed": 50364,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359
+      ]
+    },
+    "monotonic": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 51865,
+          "finite_sum": -18333.393949508667,
+          "label": "text_dominant",
+          "n_suppressed": 1,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              50363,
+              50363
+            ]
+          ]
+        },
+        {
+          "finite_count": 1502,
+          "finite_sum": 8980.888619422913,
+          "label": "ts_dominant",
+          "n_suppressed": 50364,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50374,
+        7751,
+        50394,
+        7751
+      ]
+    },
+    "zero_timestamp": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 51865,
+          "finite_sum": -18333.393949508667,
+          "label": "text_dominant",
+          "n_suppressed": 1,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              50363,
+              50363
+            ]
+          ]
+        },
+        {
+          "finite_count": 1502,
+          "finite_sum": 8980.888619422913,
+          "label": "ts_dominant",
+          "n_suppressed": 50364,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50364,
+        7751
+      ]
+    }
+  },
+  "timestamp_rules_openai_semantics": {
+    "after_paired_timestamps": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 1578,
+          "finite_sum": -17472.867297172546,
+          "label": "text_dominant",
+          "n_suppressed": 50288,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              0,
+              50256
+            ],
+            [
+              50363,
+              50393
+            ]
+          ]
+        },
+        {
+          "finite_count": 1472,
+          "finite_sum": 8812.592288017273,
+          "label": "ts_dominant",
+          "n_suppressed": 50394,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50393
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50374,
+        7751,
+        50394
+      ]
+    },
+    "after_single_timestamp": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 50363,
+          "finite_sum": -479.52187156677246,
+          "label": "text_dominant",
+          "n_suppressed": 1503,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              50363,
+              51865
+            ]
+          ]
+        },
+        {
+          "finite_count": 50363,
+          "finite_sum": 386.8006353378296,
+          "label": "ts_dominant",
+          "n_suppressed": 1503,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              50363,
+              51865
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50374
+      ]
+    },
+    "initial_cap_50": {
+      "max_initial_timestamp_index": 50,
+      "rows": [
+        {
+          "finite_count": 51,
+          "finite_sum": -627.4983892440796,
+          "label": "text_dominant",
+          "n_suppressed": 51815,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ],
+            [
+              50415,
+              51865
+            ]
+          ]
+        },
+        {
+          "finite_count": 51,
+          "finite_sum": 319.2150716781616,
+          "label": "ts_dominant",
+          "n_suppressed": 51815,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ],
+            [
+              50415,
+              51865
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359
+      ]
+    },
+    "initial_no_cap": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 1502,
+          "finite_sum": -17853.872077941895,
+          "label": "text_dominant",
+          "n_suppressed": 50364,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        },
+        {
+          "finite_count": 1502,
+          "finite_sum": 8980.888619422913,
+          "label": "ts_dominant",
+          "n_suppressed": 50364,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50363
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359
+      ]
+    },
+    "monotonic": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 51834,
+          "finite_sum": -17972.841751098633,
+          "label": "text_dominant",
+          "n_suppressed": 32,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              50363,
+              50394
+            ]
+          ]
+        },
+        {
+          "finite_count": 1471,
+          "finite_sum": 8810.936188697815,
+          "label": "ts_dominant",
+          "n_suppressed": 50395,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50394
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50374,
+        7751,
+        50394,
+        7751
+      ]
+    },
+    "zero_timestamp": {
+      "max_initial_timestamp_index": null,
+      "rows": [
+        {
+          "finite_count": 51864,
+          "finite_sum": -18323.45673084259,
+          "label": "text_dominant",
+          "n_suppressed": 2,
+          "row": 0,
+          "suppressed_ranges": [
+            [
+              50363,
+              50364
+            ]
+          ]
+        },
+        {
+          "finite_count": 1501,
+          "finite_sum": 8982.348608016968,
+          "label": "ts_dominant",
+          "n_suppressed": 50365,
+          "row": 1,
+          "suppressed_ranges": [
+            [
+              0,
+              50364
+            ]
+          ]
+        }
+      ],
+      "tokens": [
+        50258,
+        50259,
+        50359,
+        50364,
+        7751
+      ]
+    }
+  },
+  "timestamp_vs_text": [
+    {
+      "max_text_token_logprob": -8.059876441955566,
+      "row": 0,
+      "rule_fires": false,
+      "timestamp_logprob": -15.538614273071289
+    },
+    {
+      "max_text_token_logprob": -10.61872673034668,
+      "row": 1,
+      "rule_fires": true,
+      "timestamp_logprob": -0.07991456985473633
+    }
+  ]
+}

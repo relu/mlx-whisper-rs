@@ -1,0 +1,9 @@
+{
+  "generated_by": "tools/gen_fixtures.py",
+  "note": "Regenerate only when deliberately re-pinning to a new upstream version.",
+  "upstream": {
+    "mlx": "0.32.1",
+    "mlx_whisper": "0.4.3",
+    "numpy": "2.5.2"
+  }
+}

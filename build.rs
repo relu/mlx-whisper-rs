@@ -1,53 +1,33 @@
+// mlx-whisper-rs has no native build steps of its own.
+//
+// All MLX linking is owned by `mlx-sys`, which this crate reaches through
+// `mlx-rs`. `mlx-sys`'s own build script cmake-builds the vendored `mlx-c`
+// sources with `MLX_C_USE_SYSTEM_MLX=OFF`, so MLX itself is fetched from git
+// (pinned to v0.25.1) and compiled from source, then linked statically as
+// `mlx` + `mlxc` alongside the Foundation/Metal/Accelerate frameworks.
+//
+// There is deliberately no attempt here to link a system MLX (e.g. from
+// `brew install mlx`) instead:
+//
+//   * `mlx-sys` 0.2.0 exposes no environment variable or cargo feature to
+//     skip its cmake build, so a system MLX would be linked *in addition to*
+//     the static one rather than in place of it.
+//   * That puts two copies of MLX in one binary, with duplicate global state
+//     (Metal device singleton, default stream, allocator).
+//   * Homebrew ships a much newer MLX than the v0.25.1 that `mlx-c` 0.2.0 is
+//     written against, so the two are not ABI-compatible even in isolation.
+//
+// Using a system MLX would require patching `mlx-sys` to pass
+// `MLX_C_USE_SYSTEM_MLX=ON` through to cmake and to link dynamically. That
+// belongs upstream in oxideai/mlx-rs, not in a downstream build script.
+
 fn main() {
-    // 如果系統已安裝 MLX（例如 brew install mlx），直接 link，不從原始碼編譯
-    // 查找順序：MLX_DIR 環境變數 → Homebrew → 自行編譯（fallback）
+    println!("cargo:rerun-if-changed=build.rs");
 
-    let mlx_lib_dir = if let Ok(dir) = std::env::var("MLX_DIR") {
-        // 使用者明確指定路徑
-        Some(dir)
-    } else if let Some(brew_prefix) = homebrew_prefix() {
-        let candidate = format!("{brew_prefix}/lib");
-        if std::path::Path::new(&format!("{candidate}/libmlx.dylib")).exists() {
-            Some(candidate)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    if let Some(lib_dir) = mlx_lib_dir {
-        // 找到系統 MLX，直接 link，告訴 mlx-sys 不要自行編譯
-        println!("cargo:rustc-link-search=native={lib_dir}");
-        println!("cargo:rustc-link-lib=dylib=mlx");
-        println!("cargo:warning=mlx-whisper-rs: using system MLX from {lib_dir}");
-
-        // 告訴 mlx-sys 的 build script 跳過編譯
-        println!("cargo:rustc-env=MLX_SYS_USE_SYSTEM=1");
-    } else {
-        println!("cargo:warning=mlx-whisper-rs: MLX not found via Homebrew, building from source (slow first build)");
-        println!("cargo:warning=Tip: run `brew install mlx` to skip source compilation");
+    if !cfg!(target_os = "macos") {
+        println!(
+            "cargo:warning=mlx-whisper-rs requires macOS on Apple Silicon; \
+             mlx-sys links Foundation/objc/Metal/Accelerate unconditionally."
+        );
     }
-}
-
-fn homebrew_prefix() -> Option<String> {
-    // Apple Silicon Homebrew 預設路徑
-    for path in ["/opt/homebrew", "/usr/local"] {
-        if std::path::Path::new(&format!("{path}/lib/libmlx.dylib")).exists() {
-            return Some(path.to_string());
-        }
-    }
-
-    // 也試試 brew --prefix 指令
-    std::process::Command::new("brew")
-        .args(["--prefix", "mlx"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| format!("{}/lib", s.trim()))
-            } else {
-                None
-            }
-        })
 }

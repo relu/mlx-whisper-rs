@@ -1,0 +1,41 @@
+{
+  "compression_ratio": [
+    {
+      "note": "div-by-zero",
+      "ratio": null,
+      "text": "",
+      "utf8_len": 0
+    },
+    {
+      "ratio": 0.38461538461538464,
+      "text": "hello",
+      "utf8_len": 5,
+      "zlib_len": 13
+    },
+    {
+      "ratio": 0.86,
+      "text": "the quick brown fox jumps over the lazy dog",
+      "utf8_len": 43,
+      "zlib_len": 50
+    },
+    {
+      "ratio": 16.666666666666668,
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "utf8_len": 200,
+      "zlib_len": 12
+    },
+    {
+      "ratio": 3.0555555555555554,
+      "text": "repeat repeat repeat repeat repeat repeat repeat repeat",
+      "utf8_len": 55,
+      "zlib_len": 18
+    },
+    {
+      "ratio": 3.5294117647058822,
+      "text": "\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587\u4e2d\u6587",
+      "utf8_len": 60,
+      "zlib_len": 17
+    }
+  ],
+  "zlib_level": "default (-1 / level 6)"
+}

@@ -18,19 +18,32 @@ A faithful port of Apple's [mlx-whisper](https://github.com/ml-explore/mlx-examp
 - `initial_prompt` support for domain-specific vocabulary
 - Previous-text conditioning across segments
 - In-memory audio input: parse WAV bytes or raw PCM without writing temp files
-- MIT licensed
+- Apache-2.0 licensed
 
 ---
 
 ## Prerequisites
 
-### 1. Install MLX via Homebrew
+### 1. Build toolchain for MLX
+
+MLX is **always compiled from source** on first build. The dependency chain is
+`mlx-rs` → `mlx-sys`, and `mlx-sys`'s build script cmake-builds its vendored
+`mlx-c` sources with `MLX_C_USE_SYSTEM_MLX=OFF`, which makes CMake fetch MLX
+`v0.25.1` from GitHub and build it in-tree. There is no supported way to skip
+this — `brew install mlx` does **not** help, and linking a Homebrew `libmlx`
+alongside the statically-linked one would put two ABI-incompatible copies of
+MLX in the same binary.
+
+You therefore need:
 
 ```bash
-brew install mlx
+xcode-select --install   # Apple Clang + Metal toolchain
+brew install cmake
 ```
 
-This links against the system MLX library and avoids compiling MLX from source (which otherwise takes 10–20 minutes on first `cargo build`).
+plus network access at build time (CMake clones the MLX repo). Budget
+**10–20 minutes for the first `cargo build`**; it is cached in `target/`
+afterwards.
 
 ### 2. Install ffmpeg (required for `load_audio` only)
 
@@ -41,15 +54,10 @@ brew install ffmpeg
 Only needed if you use `load_audio()` to load audio from a file path.
 Not required if you use `audio_from_wav_bytes()` or `audio_from_pcm_s16le()`.
 
-### 3. Copy tokenizer & filter assets
+### 3. Populate tokenizer & filter assets
 
 ```bash
-mkdir -p assets
-
-# Copy from the mlx_whisper Python package
-MLXW=$(python3 -c "import mlx_whisper, os; print(os.path.dirname(mlx_whisper.__file__))")
-cp "$MLXW/assets/"*.tiktoken assets/
-cp "$MLXW/assets/"*.npy assets/
+python3 tools/extract_assets.py
 ```
 
 The required files are:
@@ -57,6 +65,16 @@ The required files are:
 - `assets/gpt2.tiktoken`
 - `assets/mel_filters_80.npy`
 - `assets/mel_filters_128.npy`
+
+The script pulls them from an installed `mlx_whisper`, or straight from the
+PyPI wheel if the package is not installed (no MLX needed for this step).
+Pin a specific release with `--version 0.4.3`.
+
+> Do **not** try to copy these by hand with `cp .../assets/*.npy assets/`.
+> Upstream ships the mel filterbanks as a *single* `mel_filters.npz` archive
+> with keys `mel_80` / `mel_128`, so that glob matches nothing — this crate
+> wants them unpacked into separate `.npy` files, which is what the script
+> does.
 
 ---
 
@@ -285,6 +303,23 @@ assets/           — *.tiktoken, *.npy (must be copied from mlx_whisper Python 
 
 ---
 
+## Testing
+
+```bash
+python3 tools/extract_assets.py   # once, for the tokenizer vocabularies
+cargo test
+```
+
+Golden fixtures in `tests/fixtures/` are generated from upstream Python
+`mlx_whisper` (pinned in `tests/fixtures/manifest.json`) by
+`tools/gen_fixtures.py`. Tests that need the `.tiktoken` vocabularies skip
+themselves if `assets/` is unpopulated, so `cargo test` works on a fresh clone.
+
+See **[PARITY.md](PARITY.md)** for a module-by-module audit against upstream,
+including the divergences the current test suite is expected to catch.
+
+---
+
 ## Differences from Python `mlx-whisper`
 
 | Feature | Python | This crate |
@@ -300,7 +335,10 @@ assets/           — *.tiktoken, *.npy (must be copied from mlx_whisper Python 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Based on [mlx-examples/whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) by Apple Inc. (Apache 2.0).
-Uses [mlx-rs](https://github.com/oxideai/mlx-rs) Rust bindings for the MLX framework.
+This is a Rust port of [mlx-examples/whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper)
+by Apple Inc., which is **MIT** licensed (not Apache-2.0, as an earlier version of
+this README stated), and which itself derives from [openai/whisper](https://github.com/openai/whisper)
+(MIT, © 2022 OpenAI). Runtime bindings come from [mlx-rs](https://github.com/oxideai/mlx-rs)
+(MIT OR Apache-2.0). Full attribution is in [NOTICE](NOTICE).

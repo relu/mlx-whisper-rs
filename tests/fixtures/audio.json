@@ -1,0 +1,80 @@
+{
+  "constants": {
+    "CHUNK_LENGTH": 30,
+    "FRAMES_PER_SECOND": 100,
+    "HOP_LENGTH": 160,
+    "N_FFT": 400,
+    "N_FRAMES": 3000,
+    "N_SAMPLES": 480000,
+    "N_SAMPLES_PER_TOKEN": 320,
+    "SAMPLE_RATE": 16000,
+    "TOKENS_PER_SECOND": 50
+  },
+  "filters": {
+    "mel_filters_128": {
+      "file": "mel_filters_128.npy",
+      "shape": [
+        128,
+        201
+      ],
+      "sum": 3.1909855409403463
+    },
+    "mel_filters_80": {
+      "file": "mel_filters_80.npy",
+      "shape": [
+        80,
+        201
+      ],
+      "sum": 1.999024092387117
+    }
+  },
+  "hanning_400": {
+    "count": 400,
+    "file": "hanning_400.f32",
+    "shape": [
+      400
+    ]
+  },
+  "input": {
+    "checksum_abs_sum": 5092.85780255552,
+    "checksum_sum": -0.00018171340721551132,
+    "formula": "s[i] = 0.5*sin(2*pi*440*i/16000) for i in 0..16000, then 0.0 for i in 16000..32000",
+    "kind": "tone440_then_silence",
+    "samples": 32000
+  },
+  "mel_128": {
+    "count": 25600,
+    "file": "mel_128.f32",
+    "shape": [
+      200,
+      128
+    ]
+  },
+  "mel_80": {
+    "count": 16000,
+    "file": "mel_80.f32",
+    "shape": [
+      200,
+      80
+    ]
+  },
+  "pad_or_trim": [
+    {
+      "in_len": 100,
+      "out_len": 100,
+      "target": 100
+    },
+    {
+      "in_len": 100,
+      "out_len": 250,
+      "pads_with": 0.0,
+      "target": 250
+    },
+    {
+      "in_len": 400,
+      "keeps": "prefix",
+      "out_len": 250,
+      "target": 250
+    }
+  ]
+}

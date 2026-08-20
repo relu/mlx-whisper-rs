@@ -1,0 +1,1182 @@
+{
+  "decode_with_timestamps": {
+    "plain": " hello world",
+    "text": "<|0.00|> hello<|1.00|> world<|2.00|>",
+    "tokens": [
+      50364,
+      7751,
+      50414,
+      1002,
+      50464
+    ]
+  },
+  "encode_decode": [
+    {
+      "decoded": " DON'T STOP",
+      "text": " DON'T STOP",
+      "tokens": [
+        20403,
+        6,
+        51,
+        38344
+      ]
+    },
+    {
+      "decoded": " IT'S A TEST",
+      "text": " IT'S A TEST",
+      "tokens": [
+        6783,
+        6,
+        50,
+        316,
+        314,
+        14497
+      ]
+    },
+    {
+      "decoded": " ALL CAPS SENTENCE WITH THE'S",
+      "text": " ALL CAPS SENTENCE WITH THE'S",
+      "tokens": [
+        14824,
+        33636,
+        50,
+        318,
+        9536,
+        7163,
+        25371,
+        5663,
+        6,
+        50
+      ]
+    },
+    {
+      "decoded": " Hello world, how are you today?",
+      "text": " Hello world, how are you today?",
+      "tokens": [
+        2425,
+        1002,
+        11,
+        577,
+        366,
+        291,
+        965,
+        30
+      ]
+    },
+    {
+      "decoded": " 100,000,000",
+      "text": " 100,000,000",
+      "tokens": [
+        2319,
+        11,
+        1360,
+        11,
+        1360
+      ]
+    },
+    {
+      "decoded": "Hello, world!",
+      "text": "Hello, world!",
+      "tokens": [
+        15947,
+        11,
+        1002,
+        0
+      ]
+    },
+    {
+      "decoded": " leading space",
+      "text": " leading space",
+      "tokens": [
+        5775,
+        1901
+      ]
+    },
+    {
+      "decoded": "trailing space ",
+      "text": "trailing space ",
+      "tokens": [
+        17227,
+        4883,
+        1901,
+        220
+      ]
+    },
+    {
+      "decoded": "\u4e2d\u6587\u6e2c\u8a66",
+      "text": "\u4e2d\u6587\u6e2c\u8a66",
+      "tokens": [
+        5975,
+        17174,
+        9592,
+        105,
+        22099
+      ]
+    },
+    {
+      "decoded": "\u00dcn\u00efc\u00f6d\u00e9 \u2014 em dash & emoji \ud83c\udfa7",
+      "text": "\u00dcn\u00efc\u00f6d\u00e9 \u2014 em dash & emoji \ud83c\udfa7",
+      "tokens": [
+        12272,
+        77,
+        15487,
+        66,
+        29747,
+        526,
+        3466,
+        846,
+        8240,
+        3693,
+        31595,
+        19034,
+        100
+      ]
+    },
+    {
+      "decoded": "",
+      "text": "",
+      "tokens": []
+    },
+    {
+      "decoded": "  ",
+      "text": "  ",
+      "tokens": [
+        220,
+        220
+      ]
+    },
+    {
+      "decoded": "123 456.789",
+      "text": "123 456.789",
+      "tokens": [
+        4762,
+        18,
+        6905,
+        21,
+        13,
+        22,
+        21115
+      ]
+    },
+    {
+      "decoded": "\n\ttabs and newlines\n",
+      "text": "\n\ttabs and newlines\n",
+      "tokens": [
+        198,
+        197,
+        83,
+        17243,
+        293,
+        777,
+        11045,
+        198
+      ]
+    }
+  ],
+  "languages": [
+    [
+      "en",
+      "english"
+    ],
+    [
+      "zh",
+      "chinese"
+    ],
+    [
+      "de",
+      "german"
+    ],
+    [
+      "es",
+      "spanish"
+    ],
+    [
+      "ru",
+      "russian"
+    ],
+    [
+      "ko",
+      "korean"
+    ],
+    [
+      "fr",
+      "french"
+    ],
+    [
+      "ja",
+      "japanese"
+    ],
+    [
+      "pt",
+      "portuguese"
+    ],
+    [
+      "tr",
+      "turkish"
+    ],
+    [
+      "pl",
+      "polish"
+    ],
+    [
+      "ca",
+      "catalan"
+    ],
+    [
+      "nl",
+      "dutch"
+    ],
+    [
+      "ar",
+      "arabic"
+    ],
+    [
+      "sv",
+      "swedish"
+    ],
+    [
+      "it",
+      "italian"
+    ],
+    [
+      "id",
+      "indonesian"
+    ],
+    [
+      "hi",
+      "hindi"
+    ],
+    [
+      "fi",
+      "finnish"
+    ],
+    [
+      "vi",
+      "vietnamese"
+    ],
+    [
+      "he",
+      "hebrew"
+    ],
+    [
+      "uk",
+      "ukrainian"
+    ],
+    [
+      "el",
+      "greek"
+    ],
+    [
+      "ms",
+      "malay"
+    ],
+    [
+      "cs",
+      "czech"
+    ],
+    [
+      "ro",
+      "romanian"
+    ],
+    [
+      "da",
+      "danish"
+    ],
+    [
+      "hu",
+      "hungarian"
+    ],
+    [
+      "ta",
+      "tamil"
+    ],
+    [
+      "no",
+      "norwegian"
+    ],
+    [
+      "th",
+      "thai"
+    ],
+    [
+      "ur",
+      "urdu"
+    ],
+    [
+      "hr",
+      "croatian"
+    ],
+    [
+      "bg",
+      "bulgarian"
+    ],
+    [
+      "lt",
+      "lithuanian"
+    ],
+    [
+      "la",
+      "latin"
+    ],
+    [
+      "mi",
+      "maori"
+    ],
+    [
+      "ml",
+      "malayalam"
+    ],
+    [
+      "cy",
+      "welsh"
+    ],
+    [
+      "sk",
+      "slovak"
+    ],
+    [
+      "te",
+      "telugu"
+    ],
+    [
+      "fa",
+      "persian"
+    ],
+    [
+      "lv",
+      "latvian"
+    ],
+    [
+      "bn",
+      "bengali"
+    ],
+    [
+      "sr",
+      "serbian"
+    ],
+    [
+      "az",
+      "azerbaijani"
+    ],
+    [
+      "sl",
+      "slovenian"
+    ],
+    [
+      "kn",
+      "kannada"
+    ],
+    [
+      "et",
+      "estonian"
+    ],
+    [
+      "mk",
+      "macedonian"
+    ],
+    [
+      "br",
+      "breton"
+    ],
+    [
+      "eu",
+      "basque"
+    ],
+    [
+      "is",
+      "icelandic"
+    ],
+    [
+      "hy",
+      "armenian"
+    ],
+    [
+      "ne",
+      "nepali"
+    ],
+    [
+      "mn",
+      "mongolian"
+    ],
+    [
+      "bs",
+      "bosnian"
+    ],
+    [
+      "kk",
+      "kazakh"
+    ],
+    [
+      "sq",
+      "albanian"
+    ],
+    [
+      "sw",
+      "swahili"
+    ],
+    [
+      "gl",
+      "galician"
+    ],
+    [
+      "mr",
+      "marathi"
+    ],
+    [
+      "pa",
+      "punjabi"
+    ],
+    [
+      "si",
+      "sinhala"
+    ],
+    [
+      "km",
+      "khmer"
+    ],
+    [
+      "sn",
+      "shona"
+    ],
+    [
+      "yo",
+      "yoruba"
+    ],
+    [
+      "so",
+      "somali"
+    ],
+    [
+      "af",
+      "afrikaans"
+    ],
+    [
+      "oc",
+      "occitan"
+    ],
+    [
+      "ka",
+      "georgian"
+    ],
+    [
+      "be",
+      "belarusian"
+    ],
+    [
+      "tg",
+      "tajik"
+    ],
+    [
+      "sd",
+      "sindhi"
+    ],
+    [
+      "gu",
+      "gujarati"
+    ],
+    [
+      "am",
+      "amharic"
+    ],
+    [
+      "yi",
+      "yiddish"
+    ],
+    [
+      "lo",
+      "lao"
+    ],
+    [
+      "uz",
+      "uzbek"
+    ],
+    [
+      "fo",
+      "faroese"
+    ],
+    [
+      "ht",
+      "haitian creole"
+    ],
+    [
+      "ps",
+      "pashto"
+    ],
+    [
+      "tk",
+      "turkmen"
+    ],
+    [
+      "nn",
+      "nynorsk"
+    ],
+    [
+      "mt",
+      "maltese"
+    ],
+    [
+      "sa",
+      "sanskrit"
+    ],
+    [
+      "lb",
+      "luxembourgish"
+    ],
+    [
+      "my",
+      "myanmar"
+    ],
+    [
+      "bo",
+      "tibetan"
+    ],
+    [
+      "tl",
+      "tagalog"
+    ],
+    [
+      "mg",
+      "malagasy"
+    ],
+    [
+      "as",
+      "assamese"
+    ],
+    [
+      "tt",
+      "tatar"
+    ],
+    [
+      "haw",
+      "hawaiian"
+    ],
+    [
+      "ln",
+      "lingala"
+    ],
+    [
+      "ha",
+      "hausa"
+    ],
+    [
+      "ba",
+      "bashkir"
+    ],
+    [
+      "jw",
+      "javanese"
+    ],
+    [
+      "su",
+      "sundanese"
+    ],
+    [
+      "yue",
+      "cantonese"
+    ]
+  ],
+  "n_languages_in_table": 100,
+  "split_to_word_tokens": {
+    "en": {
+      "text": " hello there world",
+      "tokens": [
+        7751,
+        456,
+        1002
+      ],
+      "word_tokens": [
+        [
+          7751
+        ],
+        [
+          456
+        ],
+        [
+          1002
+        ]
+      ],
+      "words": [
+        " hello",
+        " there",
+        " world"
+      ]
+    },
+    "zh": {
+      "text": "\u4eca\u5929\u5929\u6c23\u5f88\u597d",
+      "tokens": [
+        12074,
+        6135,
+        24090,
+        23801
+      ],
+      "word_tokens": [
+        [
+          12074
+        ],
+        [
+          6135
+        ],
+        [
+          24090
+        ],
+        [
+          23801
+        ]
+      ],
+      "words": [
+        "\u4eca\u5929",
+        "\u5929",
+        "\u6c23",
+        "\u5f88\u597d"
+      ]
+    }
+  },
+  "variants": {
+    "gpt2_en_transcribe": {
+      "all_language_codes_first8": [
+        "ln",
+        "tg",
+        "lb",
+        "uz",
+        "ru",
+        "sk",
+        "kn",
+        "mi"
+      ],
+      "all_language_tokens_first8": [
+        50352,
+        50330,
+        50344,
+        50336,
+        50262,
+        50297,
+        50305,
+        50294
+      ],
+      "all_language_tokens_len": 99,
+      "encode_space": [
+        220
+      ],
+      "eot": 50256,
+      "kwargs": {
+        "language": "en",
+        "multilingual": false,
+        "num_languages": 99,
+        "task": "transcribe"
+      },
+      "language_token_error": "ValueError",
+      "no_speech": 50361,
+      "no_timestamps": 50362,
+      "non_speech_tokens": [
+        1,
+        2,
+        7,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26,
+        27,
+        28,
+        29,
+        31,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        90,
+        91,
+        92,
+        93,
+        357,
+        366,
+        438,
+        532,
+        685,
+        705,
+        796,
+        930,
+        1058,
+        1220,
+        1267,
+        1279,
+        1303,
+        1343,
+        1377,
+        1391,
+        1635,
+        1782,
+        1875,
+        2162,
+        2361,
+        2488,
+        3467,
+        4008,
+        4211,
+        4600,
+        4808,
+        5299,
+        5855,
+        6329,
+        7203,
+        9609,
+        9959,
+        10563,
+        10786,
+        11420,
+        11709,
+        11907,
+        13163,
+        13697,
+        13700,
+        14808,
+        15306,
+        16410,
+        16791,
+        17992,
+        19203,
+        19510,
+        20724,
+        22305,
+        22935,
+        27007,
+        30109,
+        30420,
+        33409,
+        34949,
+        40283,
+        40493,
+        40549,
+        47282,
+        49146
+      ],
+      "sot": 50257,
+      "sot_lm": 50359,
+      "sot_prev": 50360,
+      "sot_sequence": [
+        50257
+      ],
+      "sot_sequence_including_notimestamps": [
+        50257,
+        50362
+      ],
+      "timestamp_begin": 50363,
+      "transcribe": 50358,
+      "translate": 50357
+    },
+    "multilingual_100_en_transcribe": {
+      "all_language_codes_first8": [
+        "ln",
+        "tg",
+        "lb",
+        "uz",
+        "ru",
+        "sk",
+        "kn",
+        "mi"
+      ],
+      "all_language_tokens_first8": [
+        50353,
+        50331,
+        50345,
+        50337,
+        50263,
+        50298,
+        50306,
+        50295
+      ],
+      "all_language_tokens_len": 100,
+      "encode_space": [
+        220
+      ],
+      "eot": 50257,
+      "kwargs": {
+        "language": "en",
+        "multilingual": true,
+        "num_languages": 100,
+        "task": "transcribe"
+      },
+      "language_token": 50259,
+      "no_speech": 50363,
+      "no_timestamps": 50364,
+      "non_speech_tokens": [
+        1,
+        2,
+        7,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26,
+        27,
+        28,
+        29,
+        31,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        90,
+        91,
+        92,
+        93,
+        359,
+        503,
+        522,
+        542,
+        873,
+        893,
+        902,
+        918,
+        922,
+        931,
+        1350,
+        1853,
+        1982,
+        2460,
+        2627,
+        3246,
+        3253,
+        3268,
+        3536,
+        3846,
+        3961,
+        4183,
+        4667,
+        6585,
+        6647,
+        7273,
+        9061,
+        9383,
+        10428,
+        10929,
+        11938,
+        12033,
+        12331,
+        12562,
+        13793,
+        14157,
+        14635,
+        15265,
+        15618,
+        16553,
+        16604,
+        18362,
+        18956,
+        20075,
+        21675,
+        22520,
+        26130,
+        26161,
+        26435,
+        28279,
+        29464,
+        31650,
+        32302,
+        32470,
+        36865,
+        42863,
+        47425,
+        49870,
+        50254
+      ],
+      "sot": 50258,
+      "sot_lm": 50361,
+      "sot_prev": 50362,
+      "sot_sequence": [
+        50258,
+        50259,
+        50360
+      ],
+      "sot_sequence_including_notimestamps": [
+        50258,
+        50259,
+        50360,
+        50364
+      ],
+      "timestamp_begin": 50365,
+      "transcribe": 50360,
+      "translate": 50359
+    },
+    "multilingual_99_en_transcribe": {
+      "all_language_codes_first8": [
+        "ln",
+        "tg",
+        "lb",
+        "uz",
+        "ru",
+        "sk",
+        "kn",
+        "mi"
+      ],
+      "all_language_tokens_first8": [
+        50353,
+        50331,
+        50345,
+        50337,
+        50263,
+        50298,
+        50306,
+        50295
+      ],
+      "all_language_tokens_len": 99,
+      "encode_space": [
+        220
+      ],
+      "eot": 50257,
+      "kwargs": {
+        "language": "en",
+        "multilingual": true,
+        "num_languages": 99,
+        "task": "transcribe"
+      },
+      "language_token": 50259,
+      "no_speech": 50362,
+      "no_timestamps": 50363,
+      "non_speech_tokens": [
+        1,
+        2,
+        7,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26,
+        27,
+        28,
+        29,
+        31,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        90,
+        91,
+        92,
+        93,
+        359,
+        503,
+        522,
+        542,
+        873,
+        893,
+        902,
+        918,
+        922,
+        931,
+        1350,
+        1853,
+        1982,
+        2460,
+        2627,
+        3246,
+        3253,
+        3268,
+        3536,
+        3846,
+        3961,
+        4183,
+        4667,
+        6585,
+        6647,
+        7273,
+        9061,
+        9383,
+        10428,
+        10929,
+        11938,
+        12033,
+        12331,
+        12562,
+        13793,
+        14157,
+        14635,
+        15265,
+        15618,
+        16553,
+        16604,
+        18362,
+        18956,
+        20075,
+        21675,
+        22520,
+        26130,
+        26161,
+        26435,
+        28279,
+        29464,
+        31650,
+        32302,
+        32470,
+        36865,
+        42863,
+        47425,
+        49870,
+        50254
+      ],
+      "sot": 50258,
+      "sot_lm": 50360,
+      "sot_prev": 50361,
+      "sot_sequence": [
+        50258,
+        50259,
+        50359
+      ],
+      "sot_sequence_including_notimestamps": [
+        50258,
+        50259,
+        50359,
+        50363
+      ],
+      "timestamp_begin": 50364,
+      "transcribe": 50359,
+      "translate": 50358
+    },
+    "multilingual_99_zh_translate": {
+      "all_language_codes_first8": [
+        "ln",
+        "tg",
+        "lb",
+        "uz",
+        "ru",
+        "sk",
+        "kn",
+        "mi"
+      ],
+      "all_language_tokens_first8": [
+        50353,
+        50331,
+        50345,
+        50337,
+        50263,
+        50298,
+        50306,
+        50295
+      ],
+      "all_language_tokens_len": 99,
+      "encode_space": [
+        220
+      ],
+      "eot": 50257,
+      "kwargs": {
+        "language": "zh",
+        "multilingual": true,
+        "num_languages": 99,
+        "task": "translate"
+      },
+      "language_token": 50260,
+      "no_speech": 50362,
+      "no_timestamps": 50363,
+      "non_speech_tokens": [
+        1,
+        2,
+        7,
+        8,
+        9,
+        10,
+        14,
+        25,
+        26,
+        27,
+        28,
+        29,
+        31,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        90,
+        91,
+        92,
+        93,
+        359,
+        503,
+        522,
+        542,
+        873,
+        893,
+        902,
+        918,
+        922,
+        931,
+        1350,
+        1853,
+        1982,
+        2460,
+        2627,
+        3246,
+        3253,
+        3268,
+        3536,
+        3846,
+        3961,
+        4183,
+        4667,
+        6585,
+        6647,
+        7273,
+        9061,
+        9383,
+        10428,
+        10929,
+        11938,
+        12033,
+        12331,
+        12562,
+        13793,
+        14157,
+        14635,
+        15265,
+        15618,
+        16553,
+        16604,
+        18362,
+        18956,
+        20075,
+        21675,
+        22520,
+        26130,
+        26161,
+        26435,
+        28279,
+        29464,
+        31650,
+        32302,
+        32470,
+        36865,
+        42863,
+        47425,
+        49870,
+        50254
+      ],
+      "sot": 50258,
+      "sot_lm": 50360,
+      "sot_prev": 50361,
+      "sot_sequence": [
+        50258,
+        50260,
+        50358
+      ],
+      "sot_sequence_including_notimestamps": [
+        50258,
+        50260,
+        50358,
+        50363
+      ],
+      "timestamp_begin": 50364,
+      "transcribe": 50359,
+      "translate": 50358
+    }
+  }
+}

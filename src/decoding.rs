@@ -410,3 +410,413 @@ pub fn decode(
         compression_ratio: compression_ratio(&text),
     })
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tokenizer::get_tokenizer;
+    use std::path::{Path, PathBuf};
+
+    /// Real Whisper multilingual vocabulary size (large-v3 family).
+    const N_VOCAB: usize = 51866;
+
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    }
+
+    /// Tokenizer assets are ~1.6 MB and are not committed; tests that need real
+    /// BPE skip themselves rather than fail on a fresh clone.
+    /// Run `python3 tools/extract_assets.py` to populate `assets/`.
+    fn tokenizer() -> Option<Tokenizer> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        if !dir.join("multilingual.tiktoken").exists() {
+            eprintln!("SKIP: run `python3 tools/extract_assets.py` to populate assets/");
+            return None;
+        }
+        get_tokenizer(true, 99, Some("en"), Some("transcribe"), &dir).ok()
+    }
+
+    /// The same LCG stream `tools/gen_fixtures.py` uses, so Rust and Python
+    /// filter the identical logits without committing a 400 KiB blob.
+    fn synth_logits_row0(n_vocab: usize, ts_begin: usize) -> Vec<f32> {
+        let mut all = Vec::with_capacity(n_vocab);
+        let mut state: u64 = 12345;
+        for _ in 0..n_vocab {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let u = (state >> 40) as f32 / (1u32 << 24) as f32;
+            all.push(u * 16.0 - 8.0);
+        }
+        // Row 0 is the "text dominant" variant: pushing the timestamp region
+        // down keeps the final logsumexp rule from firing, so the earlier
+        // clauses stay observable instead of being buried under an all-`-inf`
+        // row.
+        for v in all.iter_mut().skip(ts_begin) {
+            *v -= 12.0;
+        }
+        all
+    }
+
+    fn neg_inf_indices(row: &[f32]) -> Vec<usize> {
+        row.iter()
+            .enumerate()
+            .filter(|(_, v)| v.is_infinite() && v.is_sign_negative())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    // ── compression_ratio ────────────────────────────────────────────────
+
+    #[test]
+    fn compression_ratio_empty_is_zero() {
+        // Upstream computes len(text_bytes) / len(zlib.compress(...)); for the
+        // empty string that is 0 / 8 == 0.0. It must not be 1.0 or NaN, since
+        // `transcribe` compares it against compression_ratio_threshold.
+        assert_eq!(compression_ratio(""), 0.0);
+    }
+
+    #[test]
+    fn compression_ratio_grows_with_redundancy() {
+        let varied = compression_ratio("the quick brown fox jumps over the lazy dog");
+        let repetitive = compression_ratio(&"a".repeat(200));
+        assert!(
+            repetitive > varied,
+            "a highly compressible string must score higher ({repetitive} vs {varied})"
+        );
+        assert!(varied > 0.0);
+    }
+
+    #[test]
+    fn compression_ratio_matches_cpython_zlib() {
+        // Pinned from CPython's zlib at the default level, via
+        // tools/gen_fixtures.py -> tests/fixtures/text_metrics.json.
+        //
+        // NOTE: `flate2`'s default backend is miniz_oxide, which is *not*
+        // byte-identical to C zlib at the same level. If this test fails by a
+        // few bytes of compressed length, the fix is to build flate2 against
+        // zlib (`features = ["zlib"]`) rather than to loosen the tolerance —
+        // the 2.4 hallucination threshold is a cliff, and a few bytes either
+        // way flips real segments.
+        let text = std::fs::read_to_string(fixtures().join("text_metrics.json"))
+            .expect("fixture text_metrics.json");
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+        for case in doc["compression_ratio"].as_array().unwrap() {
+            let s = case["text"].as_str().unwrap();
+            let Some(want) = case["ratio"].as_f64() else {
+                continue; // the empty-string case, covered above
+            };
+            let got = compression_ratio(s) as f64;
+            assert!(
+                (got - want).abs() < 1e-6,
+                "compression_ratio({s:?}) = {got}, upstream zlib gives {want}"
+            );
+        }
+    }
+
+    // ── SuppressBlank ────────────────────────────────────────────────────
+
+    #[test]
+    fn suppress_blank_applies_only_at_sample_begin() {
+        let logits = Array::from_slice(&vec![0.0f32; 16], &[16]);
+        let mask = Array::from_slice(&build_mask(&[3, 7], 16), &[16]);
+
+        let at = apply_suppress_blank(&logits, 5, 5, &mask);
+        let at_slice: &[f32] = at.as_slice();
+        assert_eq!(neg_inf_indices(at_slice), vec![3, 7]);
+
+        for tokens_len in [4usize, 6] {
+            let off = apply_suppress_blank(&logits, tokens_len, 5, &mask);
+            let off_slice: &[f32] = off.as_slice();
+            assert!(
+                neg_inf_indices(off_slice).is_empty(),
+                "SuppressBlank must be inert at tokens_len {tokens_len} (sample_begin 5)"
+            );
+        }
+    }
+
+    #[test]
+    fn suppress_blank_mask_is_space_plus_eot() {
+        let Some(tk) = tokenizer() else { return };
+        // Upstream: mask[tokenizer.encode(" ") + [tokenizer.eot]] = -inf
+        let mut want = tk.encode(" ");
+        want.push(tk.eot());
+        want.sort_unstable();
+
+        let mask = build_mask(&want, N_VOCAB);
+        let got: Vec<usize> = mask
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.is_infinite())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(got, want.iter().map(|&t| t as usize).collect::<Vec<_>>());
+    }
+
+    // ── ApplyTimestampRules ──────────────────────────────────────────────
+
+    #[test]
+    fn timestamp_rules_always_suppress_no_timestamps() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
+        let sot = tk.sot_sequence.clone();
+        let sample_begin = sot.len();
+
+        // At the initial position, after a text token, and after a timestamp.
+        let text_tok = tk.encode(" hello")[0];
+        let seqs: Vec<Vec<u32>> = vec![
+            sot.clone(),
+            {
+                let mut s = sot.clone();
+                s.push(ts_begin as u32 + 10);
+                s.push(text_tok);
+                s
+            },
+            {
+                let mut s = sot.clone();
+                s.push(ts_begin as u32 + 10);
+                s
+            },
+        ];
+
+        for seq in seqs {
+            let out = apply_timestamp_rules(&logits, &seq, sample_begin, &tk, None).unwrap();
+            let row: &[f32] = out.as_slice();
+            assert!(
+                row[tk.no_timestamps() as usize].is_infinite(),
+                "<|notimestamps|> must be suppressed at every step (seq len {})",
+                seq.len()
+            );
+        }
+    }
+
+    #[test]
+    fn timestamp_rules_force_a_timestamp_at_the_initial_position() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
+        let sot = tk.sot_sequence.clone();
+
+        let out = apply_timestamp_rules(&logits, &sot, sot.len(), &tk, None).unwrap();
+        let row: &[f32] = out.as_slice();
+
+        for i in 0..ts_begin {
+            assert!(
+                row[i].is_infinite(),
+                "every non-timestamp token must be suppressed at the initial position (index {i})"
+            );
+        }
+        assert!(
+            row[ts_begin].is_finite(),
+            "the timestamp region must stay open at the initial position"
+        );
+    }
+
+    #[test]
+    fn timestamp_rules_max_initial_timestamp_boundary_is_inclusive() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
+        let sot = tk.sot_sequence.clone();
+        let max_idx = 50usize; // round(1.0 / (30 / 1500))
+
+        let out = apply_timestamp_rules(&logits, &sot, sot.len(), &tk, Some(max_idx)).unwrap();
+        let row: &[f32] = out.as_slice();
+
+        assert!(
+            row[ts_begin + max_idx].is_finite(),
+            "ts_begin + max_initial_timestamp_index must remain ALLOWED (inclusive bound)"
+        );
+        assert!(
+            row[ts_begin + max_idx + 1].is_infinite(),
+            "one past the bound must be suppressed"
+        );
+    }
+
+    #[test]
+    fn timestamp_rules_pair_constraint_after_two_timestamps() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
+
+        // ... <ts> <ts>  => the next token must NOT be a timestamp.
+        let mut seq = tk.sot_sequence.clone();
+        let sample_begin = seq.len();
+        seq.push(ts_begin as u32 + 10);
+        seq.push(ts_begin as u32 + 20);
+
+        let out = apply_timestamp_rules(&logits, &seq, sample_begin, &tk, None).unwrap();
+        let row: &[f32] = out.as_slice();
+        for i in ts_begin..N_VOCAB {
+            assert!(
+                row[i].is_infinite(),
+                "after two consecutive timestamps the whole timestamp region must be closed (index {i})"
+            );
+        }
+    }
+
+    #[test]
+    fn timestamp_rules_text_is_closed_after_a_lone_timestamp() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let eot = tk.eot() as usize;
+        let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
+
+        // ... <text> <ts>  => the next token must NOT be ordinary text, but EOT
+        // stays reachable (upstream masks `[..eot]`, not `[..=eot]`).
+        let mut seq = tk.sot_sequence.clone();
+        let sample_begin = seq.len();
+        seq.push(tk.encode(" hello")[0]);
+        seq.push(ts_begin as u32 + 10);
+
+        let out = apply_timestamp_rules(&logits, &seq, sample_begin, &tk, None).unwrap();
+        let row: &[f32] = out.as_slice();
+
+        for i in 0..eot {
+            assert!(row[i].is_infinite(), "text token {i} must be closed");
+        }
+        assert!(
+            row[eot].is_finite(),
+            "EOT must remain reachable directly after a timestamp"
+        );
+    }
+
+    /// Timestamps must not decrease.
+    ///
+    /// This clause is where `mlx_whisper` 0.4.3 and `openai/whisper` disagree,
+    /// and where this port follows **openai/whisper**. Upstream mlx collects
+    /// list *indices* (`[i for i, v in enumerate(seq) if v > ts_begin]`) where
+    /// openai collects token *values*, so upstream's mask range
+    /// `[ts_begin : last_timestamp]` is empty and the constraint never fires
+    /// at all. See `tests/fixtures/README.md`.
+    ///
+    /// If bug-for-bug parity with `mlx_whisper` is ever chosen over
+    /// correctness, this is the test to invert.
+    #[test]
+    fn timestamp_rules_enforce_monotonic_timestamps() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
+        let text_tok = tk.encode(" hello")[0];
+
+        // ... <ts+50> <text>  => a timestamp below ts+50 must be closed.
+        let mut seq = tk.sot_sequence.clone();
+        let sample_begin = seq.len();
+        seq.push(ts_begin as u32 + 50);
+        seq.push(text_tok);
+
+        let out = apply_timestamp_rules(&logits, &seq, sample_begin, &tk, None).unwrap();
+        let row: &[f32] = out.as_slice();
+
+        assert!(
+            row[ts_begin + 10].is_infinite(),
+            "a timestamp earlier than the last one must be suppressed"
+        );
+        assert!(
+            row[ts_begin + 51].is_finite(),
+            "a later timestamp must stay allowed"
+        );
+        // The `+1` bump forces a non-zero segment length: repeating the last
+        // timestamp is not allowed when the previous token was text.
+        assert!(
+            row[ts_begin + 50].is_infinite(),
+            "repeating the last timestamp would produce a zero-length segment"
+        );
+    }
+
+    /// The final "sample a timestamp if their total probability beats every
+    /// text token" rule must normalise the **unmasked** logits.
+    ///
+    /// Python (`decoding.py:383-394`) computes `logprobs` from the logits as
+    /// they arrived — carrying only SuppressBlank/SuppressTokens — not from
+    /// this filter's own mask. Normalising the masked logits instead changes
+    /// both the `logsumexp` denominator and which entries are still finite,
+    /// so the `ts_lp > max_text_lp` comparison can flip.
+    ///
+    /// This case is built to flip it deterministically. After `[text, ts]` the
+    /// pairing rule masks `[0, eot)`, so:
+    ///
+    ///   * unmasked — one very strong text token at index 100 dominates, so
+    ///     `max_text_lp ~= 0` and `ts_lp ~= -12.7`: the rule does NOT fire and
+    ///     EOT stays reachable;
+    ///   * masked — index 100 is now `-inf`, `max_text_lp` drops to ~-17.3
+    ///     while `ts_lp ~= 0`: the rule fires and closes EOT too.
+    ///
+    /// So `logits[eot]` being finite is exactly the discriminator.
+    #[test]
+    fn timestamp_rules_normalise_unmasked_logits() {
+        let Some(tk) = tokenizer() else { return };
+        let ts_begin = tk.timestamp_begin() as usize;
+        let eot = tk.eot() as usize;
+
+        let mut v = vec![-10.0f32; N_VOCAB];
+        v[100] = 20.0; // a text token below eot, dominant before masking
+        for x in v.iter_mut().skip(ts_begin) {
+            *x = 0.0; // ~1502 timestamps, individually weak but numerous
+        }
+        let logits = Array::from_slice(&v, &[N_VOCAB as i32]);
+
+        let mut seq = tk.sot_sequence.clone();
+        let sample_begin = seq.len();
+        seq.push(tk.encode(" hello")[0]);
+        seq.push(ts_begin as u32 + 10);
+
+        let out = apply_timestamp_rules(&logits, &seq, sample_begin, &tk, None).unwrap();
+        let row: &[f32] = out.as_slice();
+
+        assert!(
+            row[eot].is_finite(),
+            "the timestamp-vs-text rule was evaluated on the masked logits: with the \
+             dominant text token already suppressed by the pairing rule, the rule fires \
+             and closes EOT, which upstream never does here"
+        );
+    }
+
+    // ── select_next_token ────────────────────────────────────────────────
+
+    #[test]
+    fn greedy_selection_never_picks_a_suppressed_token() {
+        let mut v = vec![0.0f32; 32];
+        v[7] = 10.0; // would win outright...
+        let mut logits = v.clone();
+        logits[7] = f32::NEG_INFINITY; // ...but is suppressed
+        logits[3] = 5.0;
+
+        let arr = Array::from_slice(&logits, &[32]);
+        let mut sum_logprobs = 0.0f32;
+        // `tokens` is the sequence so far; non-empty because select_next_token
+        // indexes tokens[0] unconditionally.
+        let tokens = [1u32, 2, 3];
+        let tok = select_next_token(&arr, 0.0, &mut sum_logprobs, &tokens).unwrap();
+
+        assert_eq!(tok, 3, "greedy selection must skip -inf entries");
+        assert!(
+            sum_logprobs < 0.0 && sum_logprobs.is_finite(),
+            "accumulated logprob should be finite and negative, got {sum_logprobs}"
+        );
+    }
+
+    #[test]
+    fn greedy_logprob_is_log_softmax_of_the_filtered_logits() {
+        // Two live tokens with equal logits => each has probability 0.5, so the
+        // accumulated logprob must be ln(0.5).
+        let mut logits = vec![f32::NEG_INFINITY; 8];
+        logits[2] = 1.0;
+        logits[5] = 1.0;
+
+        let arr = Array::from_slice(&logits, &[8]);
+        let mut sum_logprobs = 0.0f32;
+        let tokens = [1u32, 2, 3];
+        let _ = select_next_token(&arr, 0.0, &mut sum_logprobs, &tokens).unwrap();
+
+        let want = 0.5f32.ln();
+        assert!(
+            (sum_logprobs - want).abs() < 1e-5,
+            "expected ln(0.5) = {want}, got {sum_logprobs}"
+        );
+    }
+}
