@@ -25,6 +25,8 @@
 
 mod common;
 
+use std::sync::{Mutex, MutexGuard};
+
 use mlx_rs::{Array, ops::indexing::IndexOp, transforms::eval};
 use mlx_whisper_rs::whisper::{BlockCache, ModelDimensions, Whisper, sinusoids};
 
@@ -70,23 +72,56 @@ fn lcg(n: usize, seed: u64) -> Vec<f32> {
     out
 }
 
+/// Serialises the tests in this file.
+///
+/// They are the only tests in the suite that build a model and run a forward
+/// pass, and libtest runs the file's tests on separate threads by default. MLX
+/// work issued concurrently from several threads shares one global stream and
+/// scheduler; keeping it to one thread at a time removes that variable. A
+/// `Mutex` rather than `--test-threads=1` so the constraint travels with the
+/// code instead of living in the CI invocation.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+/// Lock `SERIAL`, ignoring poisoning — a panic in one test should fail that
+/// test, not cascade into "the mutex is poisoned" for the other two.
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A model whose positional embedding is actually position-dependent, plus a
 /// stand-in for the encoder output to cross-attend to.
+///
+/// The `step` markers exist because a segfault inside MLX takes the whole test
+/// binary down before libtest reports anything at all; with `--nocapture`, as
+/// CI runs it, the last line printed is the call that died.
 fn model_and_audio_features() -> (Whisper, Array) {
+    let step = |s: &str| eprintln!("[decoder_cache] {s}");
+
+    step("init_device");
     common::init_device();
     let dims = tiny_dims();
+
+    step("Whisper::new");
     let mut model = Whisper::new(dims.clone()).expect("build the model");
 
-    // Overwrite the zeros the constructor leaves behind — see the module docs.
-    model.decoder.positional_embedding =
-        sinusoids(dims.n_text_ctx, dims.n_text_state).expect("sinusoids");
+    step("sinusoids");
+    let pe = sinusoids(dims.n_text_ctx, dims.n_text_state).expect("sinusoids");
+    step("eval sinusoids");
+    eval([&pe]).expect("evaluate the positional embedding");
 
+    // Overwrite the zeros the constructor leaves behind — see the module docs.
+    model.decoder.positional_embedding = pe;
+
+    step("audio features");
     let n = dims.n_audio_ctx * dims.n_audio_state;
     let xa = Array::from_slice(
         &lcg(n, 0x5EED),
         &[1, dims.n_audio_ctx as i32, dims.n_audio_state as i32],
     );
+    step("eval audio features");
+    eval([&xa]).expect("evaluate the audio features");
 
+    step("model ready");
     (model, xa)
 }
 
@@ -121,7 +156,9 @@ const TOL: f32 = 1e-3;
 
 #[test]
 fn cached_decoding_matches_a_single_full_pass() {
+    let _serial = serial();
     let (mut model, xa) = model_and_audio_features();
+    eprintln!("[decoder_cache] full-sequence forward");
 
     let all = Array::from_slice(&IDS[..], &[1, IDS.len() as i32]);
     let (full, _, _) = model
@@ -158,7 +195,9 @@ fn cached_decoding_matches_a_single_full_pass() {
 /// shape directly.
 #[test]
 fn the_self_attention_cache_grows_one_position_per_step() {
+    let _serial = serial();
     let (mut model, xa) = model_and_audio_features();
+    eprintln!("[decoder_cache] cache-shape walk");
     let dims = tiny_dims();
 
     let mut cache: Option<Vec<Option<BlockCache>>> = None;
@@ -203,7 +242,9 @@ fn the_self_attention_cache_grows_one_position_per_step() {
 /// trivial reasons and the offset arithmetic would be untested.
 #[test]
 fn logits_depend_on_position() {
+    let _serial = serial();
     let (mut model, xa) = model_and_audio_features();
+    eprintln!("[decoder_cache] position-dependence check");
 
     let all = Array::from_slice(&IDS[..], &[1, IDS.len() as i32]);
     let (full, _, _) = model
