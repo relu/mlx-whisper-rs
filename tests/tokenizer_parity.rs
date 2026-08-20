@@ -15,6 +15,7 @@ use mlx_whisper_rs::tokenizer::{get_tokenizer, LANGUAGES};
 
 #[test]
 fn language_table_matches_upstream() {
+    common::init_device();
     let fx = common::json("tokenizer");
     let want = fx["languages"].as_array().unwrap();
 
@@ -38,6 +39,7 @@ fn language_table_matches_upstream() {
 /// Table-driven over every tokenizer variant captured in the fixtures.
 #[test]
 fn special_token_layout_matches_upstream() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -83,6 +85,7 @@ fn special_token_layout_matches_upstream() {
 
 #[test]
 fn non_speech_tokens_match_upstream() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -109,6 +112,7 @@ fn non_speech_tokens_match_upstream() {
 
 #[test]
 fn all_language_tokens_are_contiguous_from_sot() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -142,6 +146,7 @@ fn all_language_tokens_are_contiguous_from_sot() {
 
 #[test]
 fn encode_decode_round_trips_match_upstream() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -161,6 +166,7 @@ fn encode_decode_round_trips_match_upstream() {
 
 #[test]
 fn decode_with_timestamps_matches_upstream() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -185,6 +191,7 @@ fn decode_with_timestamps_matches_upstream() {
 
 #[test]
 fn split_to_word_tokens_matches_upstream() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -221,6 +228,7 @@ fn split_to_word_tokens_matches_upstream() {
 
 #[test]
 fn language_lookup_accepts_codes_and_names() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -245,15 +253,16 @@ fn language_lookup_accepts_codes_and_names() {
 ///
 /// Upstream truncates the table first — `tuple(LANGUAGES.keys())[:num_languages]`
 /// — so `langs.index(language)` raises `ValueError` for anything past the
-/// window. `Tokenizer::new` instead searches the full 100-entry `LANGUAGES` and
-/// falls back to `unwrap_or(0)`.
+/// window. `Tokenizer::new` used to search the full 100-entry `LANGUAGES` and
+/// fall back to `unwrap_or(0)`.
 ///
-/// The concrete failure: `yue` is index 99, so for a 99-language model the port
-/// emits `sot + 1 + 99 == 50358`, which is `<|translate|>` — a task token
-/// silently standing in for a language token. Any unknown future code likewise
-/// collapses to English rather than erroring.
+/// The concrete failure that motivated this test: `yue` is index 99, so for a
+/// 99-language model the port emitted `sot + 1 + 99 == 50358`, which is
+/// `<|translate|>` — a task token silently standing in for a language token.
+/// Any unknown code likewise collapsed to English rather than erroring.
 #[test]
 fn language_outside_num_languages_window_is_rejected() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };
@@ -283,6 +292,7 @@ fn language_outside_num_languages_window_is_rejected() {
 /// Every language code must round-trip to the token id derived from its index.
 #[test]
 fn every_language_code_maps_to_its_positional_token() {
+    common::init_device();
     let Some(assets) = common::require_assets() else {
         return;
     };

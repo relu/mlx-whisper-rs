@@ -307,7 +307,18 @@ pub fn load_model(path_or_hf_repo: &str) -> Result<Whisper> {
     // Remove fields not in ModelDimensions
     if let Some(obj) = config.as_object_mut() {
         obj.remove("model_type");
-        obj.remove("quantization");
+        // Upstream calls `nn.quantize(model, **quantization)` before applying
+        // weights. There is no QuantizedLinear/QuantizedEmbedding path here, so
+        // dropping the config and loading anyway would assign packed uint32
+        // `.weight` tensors into dense Linear layers and discard `.scales` /
+        // `.biases` — a shape/dtype failure at best, silent garbage at worst.
+        // Fail with something a user can act on instead.
+        if let Some(q) = obj.remove("quantization") {
+            bail!(
+                "{path_or_hf_repo} is a quantized MLX model ({q}), which this crate does not \
+                 support yet. Use an unquantized repo, e.g. mlx-community/whisper-large-v3-turbo."
+            );
+        }
     }
     let dims: ModelDimensions = serde_json::from_value(config)?;
 

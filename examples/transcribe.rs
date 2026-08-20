@@ -46,19 +46,40 @@ fn main() -> anyhow::Result<()> {
 
     let mut i = 0usize;
     while i < args.len() {
+        // A flag given as the last argument used to index past the end and
+        // panic with "index out of bounds" instead of printing usage.
+        let mut take_value = |i: &mut usize| -> anyhow::Result<String> {
+            let flag = args[*i].clone();
+            *i += 1;
+            args.get(*i)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("{flag} requires a value"))
+        };
+
         match args[i].as_str() {
-            "--model" => { i += 1; model_id = args[i].clone(); }
-            "--language" | "--lang" => { i += 1; language = Some(args[i].clone()); }
-            "--task" => { i += 1; task = args[i].clone(); }
-            "--assets" => { i += 1; assets_dir = PathBuf::from(&args[i]); }
-            "--verbose" | "-v" => { verbose = true; }
-            s if !s.starts_with("--") => { audio_file = Some(s.to_string()); }
+            "--model" => model_id = take_value(&mut i)?,
+            "--language" | "--lang" => language = Some(take_value(&mut i)?),
+            "--task" => task = take_value(&mut i)?,
+            "--assets" => assets_dir = PathBuf::from(take_value(&mut i)?),
+            "--verbose" | "-v" => verbose = true,
+            s if !s.starts_with("--") => {
+                if audio_file.is_some() {
+                    anyhow::bail!("Only one audio file may be given (got a second: {s})");
+                }
+                audio_file = Some(s.to_string());
+            }
             other => eprintln!("Unknown option: {other}"),
         }
         i += 1;
     }
 
-    let audio_file = audio_file.ok_or_else(|| anyhow::anyhow!("Audio file required"))?;
+    let audio_file = audio_file.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Audio file required\n\n\
+             usage: transcribe <audio> [--model ID] [--language CODE] [--task transcribe|translate] \
+             [--assets DIR] [--verbose]"
+        )
+    })?;
 
     // ── Validate assets directory ─────────────────────────────────────────────
     check_assets(&assets_dir)?;

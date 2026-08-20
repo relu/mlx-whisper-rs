@@ -165,8 +165,15 @@ fn apply_timestamp_rules(
     let logits_masked = logits + &mask_arr;
 
     // If total timestamp logprob > max text token logprob → suppress text tokens
+    //
+    // Upstream normalises the logits *as they arrived* — carrying only
+    // SuppressBlank/SuppressTokens — not this filter's own mask. Normalising
+    // `logits_masked` instead changes both the logsumexp denominator and which
+    // entries are still finite, so the comparison below can flip: after two
+    // consecutive timestamps the whole timestamp region is already -inf, which
+    // would make `ts_lp` -inf and stop the clause ever firing.
     if ts_begin > 0 && ts_begin < n_vocab {
-        let logprobs = &logits_masked - &logsumexp_axis(&logits_masked, 0, true)?;
+        let logprobs = logits - &logsumexp_axis(logits, 0, true)?;
         // Sum prob of all timestamps
         let ts_lp = logsumexp_axis(logprobs.index((ts_begin as i32..,)), 0, false)?;
         // Max prob of any text token
@@ -288,10 +295,12 @@ pub fn decode(
             let parsed: Vec<i64> = s.split(',')
                 .filter_map(|x| x.trim().parse().ok())
                 .collect();
+            // Upstream keeps every non-negative id *and* adds the non-speech
+            // set when the -1 sentinel is present; it is not an either/or, so
+            // "-1,50257" suppresses 50257 too.
+            suppress_ids.extend(parsed.iter().filter(|&&t| t >= 0).map(|&t| t as u32));
             if parsed.contains(&-1) {
                 suppress_ids.extend(tokenizer.non_speech_tokens());
-            } else {
-                suppress_ids.extend(parsed.iter().filter(|&&t| t >= 0).map(|&t| t as u32));
             }
         }
 
@@ -422,6 +431,22 @@ mod tests {
     /// Real Whisper multilingual vocabulary size (large-v3 family).
     const N_VOCAB: usize = 51866;
 
+    /// Pin MLX to the CPU device when `MLX_WHISPER_RS_TEST_CPU` is set.
+    ///
+    /// GitHub's macOS runners are VMs with paravirtualised Metal; dispatching
+    /// GPU work there aborts the process with an `AppleParavirtCommandBuffer`
+    /// assertion, and since that is a SIGABRT it takes down the whole test
+    /// binary. The fixtures are all device-independent, so the CPU backend is
+    /// numerically equivalent. Opt-in, so a real Mac still covers the GPU path.
+    fn init_device() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            if std::env::var_os("MLX_WHISPER_RS_TEST_CPU").is_some() {
+                mlx_rs::Device::set_default(&mlx_rs::Device::cpu());
+            }
+        });
+    }
+
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
     }
@@ -472,6 +497,7 @@ mod tests {
 
     #[test]
     fn compression_ratio_empty_is_zero() {
+        init_device();
         // Upstream computes len(text_bytes) / len(zlib.compress(...)); for the
         // empty string that is 0 / 8 == 0.0. It must not be 1.0 or NaN, since
         // `transcribe` compares it against compression_ratio_threshold.
@@ -480,6 +506,7 @@ mod tests {
 
     #[test]
     fn compression_ratio_grows_with_redundancy() {
+        init_device();
         let varied = compression_ratio("the quick brown fox jumps over the lazy dog");
         let repetitive = compression_ratio(&"a".repeat(200));
         assert!(
@@ -491,6 +518,7 @@ mod tests {
 
     #[test]
     fn compression_ratio_matches_cpython_zlib() {
+        init_device();
         // Pinned from CPython's zlib at the default level, via
         // tools/gen_fixtures.py -> tests/fixtures/text_metrics.json.
         //
@@ -521,6 +549,7 @@ mod tests {
 
     #[test]
     fn suppress_blank_applies_only_at_sample_begin() {
+        init_device();
         let logits = Array::from_slice(&vec![0.0f32; 16], &[16]);
         let mask = Array::from_slice(&build_mask(&[3, 7], 16), &[16]);
 
@@ -540,6 +569,7 @@ mod tests {
 
     #[test]
     fn suppress_blank_mask_is_space_plus_eot() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         // Upstream: mask[tokenizer.encode(" ") + [tokenizer.eot]] = -inf
         let mut want = tk.encode(" ");
@@ -560,6 +590,7 @@ mod tests {
 
     #[test]
     fn timestamp_rules_always_suppress_no_timestamps() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
@@ -596,6 +627,7 @@ mod tests {
 
     #[test]
     fn timestamp_rules_force_a_timestamp_at_the_initial_position() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
@@ -618,6 +650,7 @@ mod tests {
 
     #[test]
     fn timestamp_rules_max_initial_timestamp_boundary_is_inclusive() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
@@ -639,6 +672,7 @@ mod tests {
 
     #[test]
     fn timestamp_rules_pair_constraint_after_two_timestamps() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
@@ -661,6 +695,7 @@ mod tests {
 
     #[test]
     fn timestamp_rules_text_is_closed_after_a_lone_timestamp() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let eot = tk.eot() as usize;
@@ -698,6 +733,7 @@ mod tests {
     /// correctness, this is the test to invert.
     #[test]
     fn timestamp_rules_enforce_monotonic_timestamps() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let logits = Array::from_slice(&synth_logits_row0(N_VOCAB, ts_begin), &[N_VOCAB as i32]);
@@ -749,6 +785,7 @@ mod tests {
     /// So `logits[eot]` being finite is exactly the discriminator.
     #[test]
     fn timestamp_rules_normalise_unmasked_logits() {
+        init_device();
         let Some(tk) = tokenizer() else { return };
         let ts_begin = tk.timestamp_begin() as usize;
         let eot = tk.eot() as usize;
@@ -780,6 +817,7 @@ mod tests {
 
     #[test]
     fn greedy_selection_never_picks_a_suppressed_token() {
+        init_device();
         let mut v = vec![0.0f32; 32];
         v[7] = 10.0; // would win outright...
         let mut logits = v.clone();
@@ -802,6 +840,7 @@ mod tests {
 
     #[test]
     fn greedy_logprob_is_log_softmax_of_the_filtered_logits() {
+        init_device();
         // Two live tokens with equal logits => each has probability 0.5, so the
         // accumulated logprob must be ln(0.5).
         let mut logits = vec![f32::NEG_INFINITY; 8];

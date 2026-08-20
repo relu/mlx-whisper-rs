@@ -7,7 +7,7 @@ use anyhow::Result;
 use mlx_rs::{Array, ops::{indexing::IndexOp, softmax_axis}, transforms::eval};
 
 use crate::audio::{
-    log_mel_spectrogram, pad_or_trim, HOP_LENGTH, N_FRAMES, SAMPLE_RATE,
+    log_mel_spectrogram, pad_or_trim, HOP_LENGTH, N_FRAMES, N_SAMPLES, SAMPLE_RATE,
 };
 use crate::decoding::{decode, DecodingOptions, DecodingResult};
 use crate::tokenizer::{get_tokenizer, LANGUAGES};
@@ -247,8 +247,11 @@ pub fn transcribe(
     let n_audio_ctx = model.dims.n_audio_ctx;
 
     // ── Compute mel spectrogram ─────────────────────────────────────────────
-    let mel = log_mel_spectrogram(audio, n_mels, assets_dir)?; // [n_frames, n_mels]
-    let content_frames = mel.shape()[0] as usize;             // total mel frames
+    // Upstream pads the audio with a full 30s of silence before the STFT, so
+    // the tail of the final segment is real mel-of-silence rather than literal
+    // 0.0 in normalised log space. `content_frames` then excludes that padding.
+    let mel = log_mel_spectrogram(audio, n_mels, assets_dir, N_SAMPLES)?; // [n_frames, n_mels]
+    let content_frames = (mel.shape()[0] as usize).saturating_sub(N_FRAMES); // real frames
 
     // ── Determine language ──────────────────────────────────────────────────
     let language: String = if let Some(ref lang) = options.language {
@@ -259,10 +262,12 @@ pub fn transcribe(
         if options.verbose {
             eprintln!("Detecting language from first 30 seconds…");
         }
-        // Take first N_FRAMES (or less) and pad to N_FRAMES
-        let first_segment_size = content_frames.min(N_FRAMES);
-        let mel_slice = mel.index((..first_segment_size as i32,));
-        let mel_30s = pad_or_trim(mel_slice, N_FRAMES)?
+        // Upstream takes the first N_FRAMES of the *padded* mel
+        // (`pad_or_trim(mel, N_FRAMES)`), so for audio shorter than 30s the
+        // tail is real mel-of-silence rather than zeros in log space. Slicing
+        // to `content_frames` first and zero-padding would feed the encoder a
+        // different input for language ID.
+        let mel_30s = pad_or_trim(mel.clone(), N_FRAMES)?
             .reshape(&[1, N_FRAMES as i32, n_mels as i32])?;
         let detected = detect_language_best(model, &mel_30s, assets_dir)?;
         if options.verbose {
@@ -332,12 +337,17 @@ pub fn transcribe(
         let mel_segment = pad_or_trim(mel_slice, N_FRAMES)?
             .reshape(&[1, N_FRAMES as i32, n_mels as i32])?;
 
-        // Build per-window prompt from accumulated tokens
-        let prompt: Option<Vec<u32>> = if options.condition_on_previous_text {
+        // Build per-window prompt from accumulated tokens.
+        //
+        // Upstream passes `all_tokens[prompt_reset_since:]` unconditionally and
+        // moves `prompt_reset_since` forward *after* the window. So with
+        // condition_on_previous_text = false the first window still receives
+        // the initial prompt (the cursor is still 0) and later windows receive
+        // nothing. Gating on the flag here instead dropped `initial_prompt`
+        // entirely in that mode.
+        let prompt: Option<Vec<u32>> = {
             let p = &all_tokens[prompt_reset_since..];
             if p.is_empty() { None } else { Some(p.to_vec()) }
-        } else {
-            None
         };
         let mut window_opts = base_decode_opts.clone();
         window_opts.prompt = prompt;
@@ -476,6 +486,19 @@ pub fn transcribe(
             }
         }
 
+        // Drop empty/whitespace-only segments *before* accumulating.
+        //
+        // Upstream clears a blank segment's `tokens` before extending
+        // `all_tokens`, so blank segments never reach the prompt-conditioning
+        // buffer nor the final text. Accumulating first and filtering after
+        // lets them contaminate `all_tokens[prompt_reset_since..]`, which is
+        // fed as <|startofprev|> context to every later window — an error that
+        // compounds across a long file.
+        let current_segments: Vec<Segment> = current_segments
+            .into_iter()
+            .filter(|s| s.start < s.end && !s.text.is_empty())
+            .collect();
+
         // ── Accumulate tokens for condition_on_previous_text ────────────────
         for seg in &current_segments {
             all_tokens.extend_from_slice(&seg.tokens);
@@ -484,12 +507,6 @@ pub fn transcribe(
         if !options.condition_on_previous_text || result.temperature > 0.5 {
             prompt_reset_since = all_tokens.len();
         }
-
-        // Drop empty/whitespace-only segments
-        let current_segments: Vec<Segment> = current_segments
-            .into_iter()
-            .filter(|s| s.start < s.end && !s.text.is_empty())
-            .collect();
 
         all_segments.extend(current_segments);
 

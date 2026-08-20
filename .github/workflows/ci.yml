@@ -9,6 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # GitHub's macOS runners are VMs with paravirtualised Metal; MLX GPU work
+  # aborts there with an AppleParavirtCommandBuffer assertion (SIGABRT), which
+  # kills the whole test binary. The fixtures are device-independent, so the
+  # CPU backend gives identical numbers.
+  MLX_WHISPER_RS_TEST_CPU: "1"
 
 jobs:
   build:

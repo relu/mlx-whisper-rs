@@ -1,7 +1,7 @@
 // Translated from mlx-whisper/tokenizer.py (Apple Inc.)
 
 use std::collections::HashMap;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 // ── Language maps ──────────────────────────────────────────────────────────
 
@@ -154,8 +154,17 @@ impl Encoding {
     }
 
     /// text → token IDs（BPE encode）
+    ///
+    /// Splits on tiktoken's `pat_str` before running BPE, exactly as upstream
+    /// does. Without this step BPE merges across boundaries the reference never
+    /// crosses — e.g. `" DON'T"` came out as `[" DON", "'T"]` where tiktoken
+    /// gives `[" DON", "'", "T"]`, because the contraction alternatives are
+    /// lowercase-only.
     pub fn encode(&self, text: &str) -> Vec<u32> {
-        bpe_encode(text.as_bytes(), &self.encoder)
+        split_tiktoken_pieces(text)
+            .into_iter()
+            .flat_map(|piece| bpe_encode(piece.as_bytes(), &self.encoder))
+            .collect()
     }
 
     /// encode a single special token（常數時間）
@@ -163,6 +172,109 @@ impl Encoding {
         self.encoder.get(token.as_bytes()).copied()
             .or_else(|| self.special_tokens.get(token).copied())
     }
+}
+
+/// Split `text` the way tiktoken's `pat_str` does, before BPE runs.
+///
+/// The pattern, from `mlx_whisper/tokenizer.py:363`:
+///
+/// ```text
+/// 's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
+/// ```
+///
+/// Hand-rolled rather than pulled in via the `regex` crate: that crate has no
+/// lookahead, which the `\s+(?!\S)` branch needs. Alternatives are tried in
+/// order at each position, first match wins — which is what makes the
+/// lowercase-only contraction list produce different output for `"don't"` and
+/// `"DON'T"`.
+///
+/// Note `\p{L}` / `\p{N}` are approximated by `char::is_alphabetic` /
+/// `char::is_numeric`. Those are the Unicode *derived* properties, marginally
+/// wider than the raw categories (`Alphabetic` also covers `Nl` and
+/// `Other_Alphabetic`), so exotic scripts could still split differently.
+fn split_tiktoken_pieces(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let is_alpha = |c: char| c.is_alphabetic();
+    let is_num = |c: char| c.is_numeric();
+    let is_ws = |c: char| c.is_whitespace();
+    let is_other = |c: char| !is_ws(c) && !is_alpha(c) && !is_num(c);
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+
+    while i < n {
+        let start = i;
+
+        // 's|'t|'re|'ve|'m|'ll|'d  — lowercase only, matching the pattern.
+        if chars[i] == '\'' && i + 1 < n {
+            let two = matches!(chars[i + 1], 's' | 't' | 'm' | 'd');
+            let three = i + 2 < n
+                && matches!(
+                    (chars[i + 1], chars[i + 2]),
+                    ('r', 'e') | ('v', 'e') | ('l', 'l')
+                );
+            if three {
+                i += 3;
+            } else if two {
+                i += 2;
+            }
+            if i > start {
+                out.push(chars[start..i].iter().collect());
+                continue;
+            }
+        }
+
+        // ` ?\p{L}+` / ` ?\p{N}+` / ` ?[^\s\p{L}\p{N}]+`
+        //
+        // The optional leading space is a literal ' ', and is only taken when a
+        // matching character actually follows — otherwise the alternative fails
+        // outright rather than matching the bare space.
+        let mut matched = false;
+        for class in [&is_alpha as &dyn Fn(char) -> bool, &is_num, &is_other] {
+            let mut j = i;
+            if chars[j] == ' ' && j + 1 < n && class(chars[j + 1]) {
+                j += 1;
+            }
+            if j < n && class(chars[j]) {
+                while j < n && class(chars[j]) {
+                    j += 1;
+                }
+                out.push(chars[start..j].iter().collect());
+                i = j;
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            continue;
+        }
+
+        // `\s+(?!\S)` then `\s+`.
+        //
+        // Greedy `\s+` runs to `k`. If the run reaches end-of-input the
+        // lookahead succeeds and the whole run matches. Otherwise `chars[k]` is
+        // non-whitespace, so the lookahead fails and the engine backtracks one
+        // character — leaving the final whitespace char for the *next* piece,
+        // which is how " a  b" splits as [" a", " ", " b"]. A run of length one
+        // cannot backtrack, so it falls through to the plain `\s+` branch.
+        if is_ws(chars[i]) {
+            let mut k = i;
+            while k < n && is_ws(chars[k]) {
+                k += 1;
+            }
+            let end = if k == n || k - 1 == i { k } else { k - 1 };
+            out.push(chars[i..end].iter().collect());
+            i = end;
+            continue;
+        }
+
+        // Unreachable for well-formed input; guarantees progress regardless.
+        out.push(chars[i].to_string());
+        i += 1;
+    }
+
+    out
 }
 
 /// 最小化 BPE encode
@@ -212,7 +324,7 @@ impl Tokenizer {
         num_languages: usize,
         language: Option<String>,
         task: Option<String>,
-    ) -> Self {
+    ) -> Result<Self> {
         let special_tokens = encoding.special_tokens.clone();
 
         let sot = special_tokens["<|startoftranscript|>"];
@@ -221,14 +333,30 @@ impl Tokenizer {
 
         let mut sot_sequence = vec![sot];
         if let Some(ref lang) = language {
-            let lang_idx = LANGUAGES.iter().position(|(code, _)| code == lang).unwrap_or(0);
+            // The model's language block is only `num_languages` wide, so the
+            // lookup must be against the truncated table. Searching the full
+            // 100-entry LANGUAGES and falling back to `unwrap_or(0)` meant a
+            // code outside the window produced a token from the *next* block:
+            // "yue" is index 99, so on a 99-language model it yielded
+            // `sot + 1 + 99` — which is `<|translate|>`, a task token standing
+            // in for a language token. An unknown code silently became English.
+            let lang_idx = LANGUAGES
+                .iter()
+                .take(num_languages)
+                .position(|(code, _)| code == lang)
+                .with_context(|| {
+                    format!(
+                        "Language {lang:?} is not among the first {num_languages} languages \
+                         this model supports"
+                    )
+                })?;
             sot_sequence.push(sot + 1 + lang_idx as u32);
         }
         if let Some(ref task_str) = task {
             sot_sequence.push(if task_str == "transcribe" { transcribe } else { translate });
         }
 
-        Self { encoding, num_languages, language, task, sot_sequence, special_tokens }
+        Ok(Self { encoding, num_languages, language, task, sot_sequence, special_tokens })
     }
 
     pub fn encode(&self, text: &str) -> Vec<u32> {
@@ -420,5 +548,5 @@ pub fn get_tokenizer(
     let vocab_path = assets_dir.join(format!("{encoding_name}.tiktoken"));
     let encoding = Encoding::from_tiktoken_file(&vocab_path, encoding_name, num_languages)?;
 
-    Ok(Tokenizer::new(encoding, num_languages, language, task))
+    Tokenizer::new(encoding, num_languages, language, task)
 }

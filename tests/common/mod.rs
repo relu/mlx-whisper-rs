@@ -197,3 +197,26 @@ pub fn require_assets() -> Option<PathBuf> {
     }
     dir
 }
+
+/// Pin MLX to the CPU device when `MLX_WHISPER_RS_TEST_CPU` is set.
+///
+/// GitHub's macOS runners are VMs with paravirtualised Metal. Dispatching GPU
+/// work there aborts the process:
+///
+/// ```text
+/// Assertion failed: (_inSegment), function
+/// -[AppleParavirtCommandBuffer addStateReference:], AppleParavirtCommandBuffer.mm:201
+/// ```
+///
+/// The abort is a SIGABRT, so it takes down the whole test binary and every
+/// test after it never runs. Forcing the CPU backend keeps the numerics
+/// identical — every fixture here is device-independent — while avoiding Metal
+/// entirely. Left opt-in so a real Mac still exercises the GPU path by default.
+pub fn init_device() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if std::env::var_os("MLX_WHISPER_RS_TEST_CPU").is_some() {
+            mlx_rs::Device::set_default(&mlx_rs::Device::cpu());
+        }
+    });
+}

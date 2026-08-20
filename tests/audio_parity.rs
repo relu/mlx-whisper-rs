@@ -14,6 +14,7 @@ use mlx_whisper_rs::audio::{
 
 #[test]
 fn constants_match_upstream() {
+    common::init_device();
     let doc = common::json("audio");
     let c = &doc["constants"];
     let got: [(&str, usize); 9] = [
@@ -38,6 +39,7 @@ fn constants_match_upstream() {
 
 #[test]
 fn synth_audio_matches_the_fixture_generator() {
+    common::init_device();
     // Guards the uncommitted-input trick: if the Rust and Python signal
     // generators ever drift, every mel comparison below would silently be
     // comparing different things.
@@ -64,6 +66,7 @@ fn synth_audio_matches_the_fixture_generator() {
 
 #[test]
 fn hann_window_is_periodic_not_symmetric() {
+    common::init_device();
     // np.hanning(N+1)[:-1]. The symmetric np.hanning(N) is the classic wrong
     // answer here: it differs from the periodic form in every interior sample
     // and puts an exact 0.0 at the final index.
@@ -85,6 +88,7 @@ fn hann_window_is_periodic_not_symmetric() {
 
 #[test]
 fn mel_filterbanks_match_upstream() {
+    common::init_device();
     let dir = common::fixtures_dir();
     let audio_fx = common::json("audio");
 
@@ -123,6 +127,7 @@ fn mel_filterbanks_match_upstream() {
 /// frame by `N_FFT / 2` samples and losing three frames per 30 s chunk.
 #[test]
 fn log_mel_produces_the_upstream_frame_count() {
+    common::init_device();
     let dir = common::fixtures_dir();
     let sig = common::synth_audio();
     let a = Array::from_slice(&sig, &[sig.len() as i32]);
@@ -142,6 +147,7 @@ fn log_mel_produces_the_upstream_frame_count() {
 
 #[test]
 fn log_mel_full_chunk_yields_exactly_n_frames() {
+    common::init_device();
     // The property the whole sliding-window pipeline is built on: one 30 s
     // chunk must produce exactly N_FRAMES (3000) frames.
     let dir = common::fixtures_dir();
@@ -158,6 +164,7 @@ fn log_mel_full_chunk_yields_exactly_n_frames() {
 
 #[test]
 fn log_mel_matches_upstream_values() {
+    common::init_device();
     let dir = common::fixtures_dir();
     let sig = common::synth_audio();
 
@@ -175,6 +182,7 @@ fn log_mel_matches_upstream_values() {
 
 #[test]
 fn log_mel_normalisation_floor_is_global() {
+    common::init_device();
     // log_spec = maximum(log_spec, log_spec.max() - 8.0); (x + 4) / 4
     // so the minimum of the result is exactly (max*4 - 8 - ... ) => the span
     // between min and max is capped at 8/4 == 2.0, globally across the whole
@@ -196,6 +204,7 @@ fn log_mel_normalisation_floor_is_global() {
 
 #[test]
 fn pad_or_trim_cases() {
+    common::init_device();
     for case in common::json("audio")["pad_or_trim"].as_array().unwrap() {
         let in_len = case["in_len"].as_u64().unwrap() as usize;
         let target = case["target"].as_u64().unwrap() as usize;
@@ -227,6 +236,7 @@ fn pad_or_trim_cases() {
 
 #[test]
 fn pad_or_trim_is_identity_at_exact_length() {
+    common::init_device();
     let data: Vec<f32> = (0..N_FRAMES).map(|i| i as f32).collect();
     let a = Array::from_slice(&data, &[N_FRAMES as i32]);
     let out = pad_or_trim(a, N_FRAMES).expect("pad_or_trim");

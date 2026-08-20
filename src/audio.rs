@@ -2,7 +2,7 @@
 
 use std::f32::consts::PI;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use mlx_rs::ops::indexing::{IndexOp, IntoStrideBy};
 use mlx_rs::ops::{as_strided, concatenate, maximum, pad};
 use mlx_rs::transforms::eval;
@@ -91,20 +91,65 @@ pub fn mel_filters(n_mels: usize, assets_dir: &std::path::Path) -> Result<Array>
 }
 
 /// 最小化 .npy float32 reader（不依賴外部 crate）
+///
+/// Validates the header rather than trusting it: a `fortran_order: True` file
+/// has exactly the same byte count as a C-order one, so skipping the check
+/// yields a silently transposed matrix instead of an error.
 fn load_npy_f32(path: &std::path::Path, expected_shape: &[i32]) -> Result<Array> {
     let bytes = std::fs::read(path)?;
 
-    // Magic: \x93NUMPY
-    if &bytes[..6] != b"\x93NUMPY" {
+    // Magic + version occupy the first 8 bytes.
+    if bytes.len() < 10 || &bytes[..6] != b"\x93NUMPY" {
         bail!("Not a valid .npy file: {:?}", path);
     }
 
-    // Header length at bytes 8-10 (little-endian u16)
-    let header_len = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
-    let data_start = 10 + header_len;
+    // v1.0 stores the header length as u16 at bytes 8..10; v2.0 as u32 at
+    // bytes 8..12.
+    let (major, _minor) = (bytes[6], bytes[7]);
+    let (header_start, header_len) = match major {
+        1 => (10usize, u16::from_le_bytes([bytes[8], bytes[9]]) as usize),
+        2 => {
+            if bytes.len() < 12 {
+                bail!("Truncated .npy v2.0 header: {:?}", path);
+            }
+            (
+                12usize,
+                u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize,
+            )
+        }
+        v => bail!("Unsupported .npy major version {v}: {:?}", path),
+    };
 
-    // Parse float32 data
-    let data: Vec<f32> = bytes[data_start..]
+    let data_start = header_start
+        .checked_add(header_len)
+        .filter(|&end| end <= bytes.len())
+        .with_context(|| format!("Truncated .npy header: {path:?}"))?;
+
+    let header = std::str::from_utf8(&bytes[header_start..data_start])
+        .with_context(|| format!("Non-UTF-8 .npy header: {path:?}"))?;
+
+    if !header.contains("'descr': '<f4'") && !header.contains("\"descr\": \"<f4\"") {
+        bail!("Expected a little-endian float32 .npy ('<f4'), got header {header:?} in {path:?}");
+    }
+    if !header.contains("'fortran_order': False") && !header.contains("\"fortran_order\": false") {
+        bail!("Expected a C-order .npy (fortran_order: False) in {path:?}");
+    }
+
+    let payload = &bytes[data_start..];
+    if payload.len() % 4 != 0 {
+        bail!("Truncated .npy payload: {:?}", path);
+    }
+
+    let expected_len: usize = expected_shape.iter().map(|&d| d as usize).product();
+    if payload.len() / 4 != expected_len {
+        bail!(
+            "Unexpected .npy shape in {path:?}: got {} float32 values, want {expected_len} \
+             (shape {expected_shape:?})",
+            payload.len() / 4
+        );
+    }
+
+    let data: Vec<f32> = payload
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
@@ -117,16 +162,32 @@ fn load_npy_f32(path: &std::path::Path, expected_shape: &[i32]) -> Result<Array>
 fn stft(x: &Array, window: &Array, nperseg: usize, noverlap: usize, nfft: usize) -> Result<Array> {
     let padding = (nperseg / 2) as i32;
 
+    if x.size() < padding as usize + 1 {
+        bail!(
+            "stft input too short: {} samples, need at least {} for reflect padding",
+            x.size(),
+            padding + 1
+        );
+    }
+
     // reflect padding：prefix = x[1:padding+1][::-1], suffix = x[-(padding+1):-1][::-1]
+    //
+    // The reversal must use an *unbounded* range: mlx-rs resolves
+    // `(..n).stride_by(-1)` as `start = size - 1, end = n`, i.e. Python
+    // `x[:n:-1]`, which is empty when `n == size`. `(..).stride_by(-1)` is the
+    // idiom that means `x[::-1]`.
     let prefix = x.index(1..(padding + 1));
-    let prefix = prefix.index((..prefix.shape()[0]).stride_by(-1));
+    let prefix = prefix.index((..).stride_by(-1));
 
     let suffix = x.index(-(padding + 1)..-1);
-    let suffix = suffix.index((..suffix.shape()[0]).stride_by(-1));
+    let suffix = suffix.index((..).stride_by(-1));
 
     let x = concatenate(&[prefix, x.clone(), suffix])?;
 
     // sliding window via as_strided
+    if x.size() + noverlap < nperseg {
+        bail!("stft input too short after padding: {} samples", x.size());
+    }
     let t = (x.size() - nperseg + noverlap) / noverlap;
     let shape = [t as i32, nfft as i32];
     let strides = [noverlap as i64, 1i64];
@@ -144,11 +205,22 @@ fn stft(x: &Array, window: &Array, nperseg: usize, noverlap: usize, nfft: usize)
 /// - `audio`: 16kHz mono float32 samples
 /// - `n_mels`: 80 or 128
 /// - `assets_dir`: 包含 mel_filters_{n_mels}.npy 的目錄
+/// - `padding`: zero **samples** appended before the STFT, matching upstream's
+///   `padding` argument. `transcribe` passes [`N_SAMPLES`] so the final partial
+///   segment is backed by real mel-of-silence rather than by literal `0.0`
+///   injected in normalised log space, which cannot occur naturally.
 pub fn log_mel_spectrogram(
     audio: Array,
     n_mels: usize,
     assets_dir: &std::path::Path,
+    padding: usize,
 ) -> Result<Array> {
+    let audio = if padding > 0 {
+        pad(&audio, &[(0i32, padding as i32)][..], None, None)?
+    } else {
+        audio
+    };
+
     let window = hanning(N_FFT);
     let freqs = stft(&audio, &window, N_FFT, HOP_LENGTH, N_FFT)?;
 
@@ -216,6 +288,12 @@ pub fn audio_from_wav_bytes(bytes: &[u8]) -> Result<(Array, u32)> {
             if chunk_size < 16 {
                 bail!("fmt chunk too small");
             }
+            // `chunk_size` is what the file *claims*; the buffer may be shorter.
+            // Without this the reads below index past the end and panic, in a
+            // parser whose whole contract is to return Err on bad input.
+            if data_off + 16 > bytes.len() {
+                bail!("Truncated fmt chunk: declared {chunk_size} bytes, buffer ends early");
+            }
             audio_format   = u16le(data_off);        // 1 = PCM, 3 = IEEE float
             channels       = u16le(data_off + 2);
             sample_rate    = u32le(data_off + 4);
@@ -231,6 +309,9 @@ pub fn audio_from_wav_bytes(bytes: &[u8]) -> Result<(Array, u32)> {
 
     if channels == 0 || data_start == 0 {
         bail!("WAV missing fmt or data chunk");
+    }
+    if sample_rate == 0 {
+        bail!("WAV declares a sample rate of 0");
     }
 
     let raw = &bytes[data_start..data_start + data_size];

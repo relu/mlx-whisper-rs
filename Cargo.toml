@@ -17,7 +17,11 @@ anyhow = "1"
 base64 = "0.22"
 once_cell = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-flate2 = "1"
+# The `zlib` backend links C zlib, which is what CPython's `zlib` module uses.
+# flate2's default miniz_oxide backend is not byte-identical at the same level,
+# and `compression_ratio` feeds a hard 2.4 threshold, so a few bytes of
+# difference flips the temperature-fallback decision on borderline segments.
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
 
 [dev-dependencies]
 hound = "3"

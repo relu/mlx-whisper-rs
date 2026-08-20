@@ -15,14 +15,18 @@ Severity key:
 | DOC | documentation or asset mismatch only |
 | OK-DIFF | deliberate, acceptable difference |
 
-> **Verification status.** MLX builds only on macOS/Apple Silicon
-> (`mlx-sys` links Foundation/objc/Metal/Accelerate unconditionally), so
-> **nothing in this repo was compiled or executed** during this audit. The Rust
-> files were syntax-checked with `rustfmt` only. The *Python* side, by contrast,
-> was executed for real: MLX runs CPU-only on Linux, so every fixture and every
-> claim marked "measured" below comes from running upstream `mlx_whisper`
-> 0.4.3. Findings marked "measured" are empirical; the rest are read from
-> source.
+> **Verification status.** The audit itself was done on Linux, where this
+> crate cannot build (`mlx-sys` links Foundation/objc/Metal/Accelerate
+> unconditionally). The *Python* side was executed for real throughout — MLX
+> ships Linux CPU wheels — so every fixture and every claim marked "measured"
+> comes from running upstream `mlx_whisper` 0.4.3. The Rust side is now built
+> and tested on macOS arm64 in CI (`.github/workflows/ci.yml`).
+>
+> Note that CI pins MLX to the **CPU** device via `MLX_WHISPER_RS_TEST_CPU`.
+> GitHub's macOS runners are VMs with paravirtualised Metal, and MLX GPU work
+> aborts there with an `AppleParavirtCommandBuffer` assertion — a SIGABRT that
+> kills the whole test binary. The GPU path is therefore **not** covered by CI
+> and still needs a real Mac.
 
 ---
 
@@ -83,13 +87,21 @@ Python `audio.py:132-136` takes `padding: int = 0` and appends that many zero
 parameter and `src/transcribe.rs:250` cannot pass one.
 
 Frame accounting still agrees, so segmentation and timestamps are unaffected.
-The divergence is confined to the **final partial segment** of every file:
-Python's tail frames hold real silence mel (≈ −0.6…−0.75 after normalisation),
-while Rust's `pad_or_trim` injects literal `0.0` in normalised log space — a
-value that cannot occur naturally. The encoder sees a different last chunk.
+The transcription loop is unaffected too: upstream slices
+`mel[seek : seek + segment_size]` with `segment_size = min(N_FRAMES,
+content_frames - seek)`, which never reaches the padded region, and then
+zero-pads to `N_FRAMES` exactly as this port does (`transcribe.py:289-294`).
 
-**Fix:** add `padding: usize` to `log_mel_spectrogram` and pass `N_SAMPLES` from
-`transcribe`. This is a public API change.
+What the padding *does* change is `detect_language`: upstream feeds
+`pad_or_trim(mel, N_FRAMES)` over the **padded** mel (`transcribe.py:172`), so
+for clips under 30s the tail is real mel-of-silence rather than `0.0` in
+normalised log space. It also shifts the global `log_spec.max()` used for
+normalisation. Language ID therefore sees a different encoder input on any
+short clip.
+
+**Fix:** add `padding: usize` to `log_mel_spectrogram`, pass `N_SAMPLES` from
+`transcribe`, set `content_frames = mel.shape[0] - N_FRAMES`, and take the
+language-ID slice from the padded mel. This is a public API change.
 
 ### AUDIO-3 — `audio_from_wav_bytes` panics on a truncated `fmt ` chunk — **BUG**
 
@@ -491,25 +503,24 @@ detection; the seek-advance branch selection; `prompt_reset_since` on
   `tests/model_math_parity.rs`, `tests/wav_parsing.rs`, and in-crate unit tests
   in `src/decoding.rs`.
 
-**No `src/` behaviour was changed.** The tests encode the *correct* expectations,
-so the following are **expected to fail** until the corresponding finding is
-fixed. That is deliberate — they are the regression proof, not an oversight:
+The fixes for every finding above marked **BUG**, plus the RISK items with a
+clear correct answer, are applied in the follow-up commit. Measured evidence
+from the pre-fix CI run:
 
-| Test | Finding |
-|---|---|
-| `audio_parity::log_mel_produces_the_upstream_frame_count` | AUDIO-1 |
-| `audio_parity::log_mel_full_chunk_yields_exactly_n_frames` | AUDIO-1 |
-| `audio_parity::log_mel_matches_upstream_values` | AUDIO-1 (+ AUDIO-2 at the tail) |
-| `wav_parsing::rejects_truncated_fmt_chunk_without_panicking` | AUDIO-3 |
-| `wav_parsing::rejects_truncated_header_prefixes` | AUDIO-3 |
-| `wav_parsing::rejects_zero_sample_rate` | AUDIO-7 |
-| `decoding::tests::timestamp_rules_normalise_unmasked_logits` | DEC-1 |
-| `decoding::tests::compression_ratio_matches_cpython_zlib` | DEC-5 |
-| `tokenizer_parity::language_outside_num_languages_window_is_rejected` | TOK-1 |
-| `tokenizer_parity::encode_decode_round_trips_match_upstream` | TOK-2 |
+* `compression_ratio("the quick brown fox jumps over the lazy dog")` returned
+  **0.796** against CPython zlib's **0.86** — DEC-5 confirmed, and the reason
+  `flate2` now builds against C zlib rather than miniz_oxide.
 
-AUDIO-2 has no test of its own — asserting on the tail padding value requires
-the `padding` parameter to exist first.
+Two findings are deliberately **not** fixed:
+
+* **MODEL-3** (no fp16/dtype knob) — a performance and API question, not a
+  correctness one, and adding a dtype parameter touches every layer.
+* **MODEL-1** is *rejected*, not implemented: quantized repos now fail with an
+  actionable error instead of loading garbage. Real support needs
+  `QuantizedLinear`/`QuantizedEmbedding`.
+
+AUDIO-2 has no direct test — asserting on the language-ID mel slice needs a
+loaded model.
 
 ## Suggested order of work
 

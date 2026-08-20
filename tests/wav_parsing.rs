@@ -43,6 +43,7 @@ fn s16(samples: &[i16]) -> Vec<u8> {
 
 #[test]
 fn parses_mono_s16le() {
+    common::init_device();
     let bytes = wav(1, 1, SAMPLE_RATE as u32, 16, &s16(&[0, 16384, -16384, 32767]));
     let (a, sr) = audio_from_wav_bytes(&bytes).expect("valid mono s16 WAV");
 
@@ -58,6 +59,7 @@ fn parses_mono_s16le() {
 
 #[test]
 fn averages_stereo_to_mono() {
+    common::init_device();
     // L = +0.5, R = -0.5 must average to exactly 0.0.
     let bytes = wav(1, 2, SAMPLE_RATE as u32, 16, &s16(&[16384, -16384, 8192, 8192]));
     let (a, _) = audio_from_wav_bytes(&bytes).expect("valid stereo WAV");
@@ -70,6 +72,7 @@ fn averages_stereo_to_mono() {
 
 #[test]
 fn skips_odd_sized_chunks_before_data() {
+    common::init_device();
     // RIFF chunks are word-aligned: a chunk with an odd declared size is
     // followed by a pad byte. A parser that advances by the raw size lands
     // one byte off and never finds `data`.
@@ -103,6 +106,7 @@ fn skips_odd_sized_chunks_before_data() {
 
 #[test]
 fn rejects_non_riff_input() {
+    common::init_device();
     assert!(audio_from_wav_bytes(b"not a wav file at all").is_err());
     assert!(audio_from_wav_bytes(&[]).is_err());
 }
@@ -112,6 +116,7 @@ fn rejects_non_riff_input() {
 /// check indexes past the end and panics, in a `Result`-returning parser.
 #[test]
 fn rejects_truncated_fmt_chunk_without_panicking() {
+    common::init_device();
     let mut bytes = Vec::new();
     bytes.extend(b"RIFF");
     bytes.extend(20u32.to_le_bytes());
@@ -127,6 +132,7 @@ fn rejects_truncated_fmt_chunk_without_panicking() {
 
 #[test]
 fn rejects_truncated_header_prefixes() {
+    common::init_device();
     // Every prefix of a valid file must fail cleanly rather than panic.
     let full = wav(1, 1, SAMPLE_RATE as u32, 16, &s16(&[1, 2, 3, 4]));
     for len in 0..full.len().min(44) {
@@ -136,6 +142,7 @@ fn rejects_truncated_header_prefixes() {
 
 #[test]
 fn rejects_zero_channels() {
+    common::init_device();
     let bytes = wav(1, 0, SAMPLE_RATE as u32, 16, &s16(&[1, 2]));
     assert!(
         audio_from_wav_bytes(&bytes).is_err(),
@@ -145,6 +152,7 @@ fn rejects_zero_channels() {
 
 #[test]
 fn rejects_zero_sample_rate() {
+    common::init_device();
     let bytes = wav(1, 1, 0, 16, &s16(&[1, 2]));
     match audio_from_wav_bytes(&bytes) {
         Err(_) => {}
@@ -157,6 +165,7 @@ fn rejects_zero_sample_rate() {
 
 #[test]
 fn reports_non_16k_sample_rate_to_the_caller() {
+    common::init_device();
     // The function does not resample; the contract is that it hands the rate
     // back so the caller can reject it. Pin that, so the contract cannot
     // silently change to "assumes 16 kHz".
@@ -168,6 +177,7 @@ fn reports_non_16k_sample_rate_to_the_caller() {
 
 #[test]
 fn parses_float32_payload() {
+    common::init_device();
     let data: Vec<u8> = [0.0f32, 0.5, -0.5, 1.0]
         .iter()
         .flat_map(|f| f.to_le_bytes())
@@ -182,6 +192,7 @@ fn parses_float32_payload() {
 
 #[test]
 fn pcm_s16le_matches_wav_payload_scaling() {
+    common::init_device();
     // The headerless path must agree with the WAV path on identical samples.
     let samples = [0i16, 16384, -16384, 32767];
     let raw = audio_from_pcm_s16le(&s16(&samples));
@@ -195,6 +206,7 @@ fn pcm_s16le_matches_wav_payload_scaling() {
 
 #[test]
 fn pcm_s16le_ignores_a_trailing_odd_byte() {
+    common::init_device();
     // A ring buffer can hand over a partial frame; it must be dropped, not
     // read past the end.
     let mut bytes = s16(&[1000, -1000]);
@@ -205,6 +217,7 @@ fn pcm_s16le_ignores_a_trailing_odd_byte() {
 
 #[test]
 fn pcm_s16le_handles_empty_input() {
+    common::init_device();
     let a = audio_from_pcm_s16le(&[]);
     assert_eq!(a.size(), 0);
 }

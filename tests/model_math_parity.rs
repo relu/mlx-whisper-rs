@@ -11,6 +11,7 @@ use mlx_whisper_rs::whisper::sinusoids;
 
 #[test]
 fn sinusoids_small_case_matches_upstream() {
+    common::init_device();
     let want = common::f32s("sinusoids_10x8");
     let s = sinusoids(10, 8).expect("sinusoids(10, 8)");
 
@@ -21,6 +22,7 @@ fn sinusoids_small_case_matches_upstream() {
 
 #[test]
 fn sinusoids_encoder_shape_matches_upstream() {
+    common::init_device();
     // The real shape used by every Whisper encoder: n_audio_ctx x n_audio_state
     // for the `base` model. Committed as checksums plus probe points rather
     // than 2.3 MB of floats.
@@ -58,6 +60,7 @@ fn sinusoids_encoder_shape_matches_upstream() {
 
 #[test]
 fn sinusoids_first_row_is_sin0_then_cos0() {
+    common::init_device();
     // Row 0 has scaled_time == 0 for every channel, so the concatenation order
     // is directly observable: the sin half must be all 0.0 and the cos half
     // all 1.0. A swapped concat shows up here immediately.
