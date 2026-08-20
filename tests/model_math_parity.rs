@@ -7,6 +7,7 @@
 
 mod common;
 
+use mlx_rs::Dtype;
 use mlx_whisper_rs::whisper::{ModelDimensions, Whisper, sinusoids};
 
 #[test]
@@ -116,15 +117,20 @@ fn dims_with_vocab(n_vocab: usize) -> ModelDimensions {
 fn multilinguality_is_derived_from_the_vocabulary_size() {
     common::init_device();
 
-    let english_only = Whisper::new(dims_with_vocab(51864)).expect("english-only model");
+    // f32: these three only exercise integer arithmetic on `dims`, not the
+    // dtype knob, so the choice is arbitrary — f32 avoids depending on the
+    // crate's fp16 default.
+    let english_only =
+        Whisper::new(dims_with_vocab(51864), Dtype::Float32).expect("english-only model");
     assert!(!english_only.is_multilingual(), "51864 is English-only");
     assert_eq!(english_only.num_languages(), 51864 - 51765);
 
-    let multilingual = Whisper::new(dims_with_vocab(51865)).expect("multilingual model");
+    let multilingual =
+        Whisper::new(dims_with_vocab(51865), Dtype::Float32).expect("multilingual model");
     assert!(multilingual.is_multilingual(), "51865 is multilingual");
     assert_eq!(multilingual.num_languages(), 99);
 
-    let large_v3 = Whisper::new(dims_with_vocab(51866)).expect("large-v3 model");
+    let large_v3 = Whisper::new(dims_with_vocab(51866), Dtype::Float32).expect("large-v3 model");
     assert!(large_v3.is_multilingual(), "51866 is multilingual");
     assert_eq!(
         large_v3.num_languages(),

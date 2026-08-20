@@ -93,6 +93,7 @@ mlx-whisper-rs = { git = "https://github.com/chrisliuqq/mlx-whisper-rs" }
 
 ```rust
 use std::path::PathBuf;
+use mlx_rs::Dtype;
 use mlx_whisper_rs::{
     audio::{load_audio, SAMPLE_RATE},
     load_models::load_model,
@@ -101,7 +102,7 @@ use mlx_whisper_rs::{
 
 fn main() -> anyhow::Result<()> {
     let assets = PathBuf::from("assets");
-    let mut model = load_model("mlx-community/whisper-large-v3-turbo")?;
+    let mut model = load_model("mlx-community/whisper-large-v3-turbo", Dtype::Float16)?;
     let audio = load_audio("audio.wav", SAMPLE_RATE)?;
 
     let result = transcribe(audio, &mut model, &assets, &TranscribeOptions {
@@ -186,7 +187,10 @@ pub const CHUNK_LENGTH: usize = 30;    // seconds per chunk
 ```rust
 // Load a Whisper model from a local directory or HuggingFace repo ID
 // Downloads automatically on first use, cached in ~/.cache/huggingface/
-pub fn load_model(model_id: &str) -> Result<Whisper>
+// `dtype` decides the dtype of the encoder positional embedding and the
+// decoder causal mask (Dtype::Float16 to match upstream's default, or
+// Dtype::Float32 to opt out); it does not cast the loaded weights.
+pub fn load_model(model_id: &str, dtype: Dtype) -> Result<Whisper>
 ```
 
 ### `transcribe` module

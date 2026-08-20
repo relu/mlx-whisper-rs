@@ -27,7 +27,7 @@ mod common;
 
 use std::sync::{Mutex, MutexGuard};
 
-use mlx_rs::{Array, ops::indexing::IndexOp, transforms::eval};
+use mlx_rs::{Array, Dtype, ops::indexing::IndexOp, transforms::eval};
 use mlx_whisper_rs::whisper::{BlockCache, ModelDimensions, Whisper, sinusoids};
 
 /// A model small enough to build in milliseconds. None of the dimensions are
@@ -101,7 +101,10 @@ fn serial() -> MutexGuard<'static, ()> {
 fn model_and_audio_features() -> (Whisper, Array) {
     common::init_device();
     let dims = tiny_dims();
-    let mut model = Whisper::new(dims.clone()).expect("build the model");
+    // f32, not the crate's fp16 default: this suite checks kv-cache offset
+    // arithmetic against random weights, unrelated to PARITY.md MODEL-3's
+    // dtype knob, and f32 keeps every intermediate at full precision.
+    let mut model = Whisper::new(dims.clone(), Dtype::Float32).expect("build the model");
 
     // Overwrite the zeros the constructor leaves behind — see the module docs.
     let pe = sinusoids(dims.n_text_ctx, dims.n_text_state).expect("sinusoids");

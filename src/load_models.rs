@@ -291,12 +291,25 @@ fn apply_weights(model: &mut Whisper, weights: &HashMap<String, Array>) -> Resul
 
 /// Load a Whisper model from a local directory or HuggingFace repo ID.
 ///
+/// `dtype` decides the dtype of the model's computed buffers (the encoder's
+/// sinusoidal positional embedding and the decoder's causal mask — see
+/// `Whisper::new`); it does *not* cast the loaded weight tensors, matching
+/// upstream `load_models.py`, which forwards `dtype` straight into
+/// `whisper.Whisper(model_args, dtype)` and applies `weights` to the model
+/// as-is. Pass `mlx_rs::Dtype::Float16` for upstream's effective default
+/// (`transcribe.py` picks it whenever `fp16` isn't disabled) or
+/// `mlx_rs::Dtype::Float32` to opt out.
+///
 /// # Examples
 /// ```no_run
-/// let model = mlx_whisper_rs::load_models::load_model("mlx-community/whisper-medium-mlx")?;
+/// use mlx_rs::Dtype;
+/// let model = mlx_whisper_rs::load_models::load_model(
+///     "mlx-community/whisper-medium-mlx",
+///     Dtype::Float16,
+/// )?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn load_model(path_or_hf_repo: &str) -> Result<Whisper> {
+pub fn load_model(path_or_hf_repo: &str, dtype: Dtype) -> Result<Whisper> {
     let model_path = resolve_model_path(path_or_hf_repo)?;
 
     // Load config.json → ModelDimensions
@@ -323,7 +336,7 @@ pub fn load_model(path_or_hf_repo: &str) -> Result<Whisper> {
     let dims: ModelDimensions = serde_json::from_value(config)?;
 
     // Build model skeleton
-    let mut model = Whisper::new(dims)?;
+    let mut model = Whisper::new(dims, dtype)?;
 
     // Load and apply weights
     let weights = load_weights(&model_path)?;

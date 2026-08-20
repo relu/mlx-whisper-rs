@@ -290,13 +290,20 @@ can flip the temperature-fallback decision.
 **Test:** `src/decoding.rs::tests::compression_ratio_matches_cpython_zlib`
 compares against values measured from CPython's `zlib`.
 
-### DEC-6 — logits are never cast to f32 — RISK
+### DEC-6 — logits are never cast to f32 — **Fixed**
 
 Python's `Inference.logits` always casts decoder output back to `mx.float32`
-before any filter or softmax. Rust has no cast, so with the fp16 weights that
+before any filter or softmax. Rust had no cast, so with the fp16 weights that
 mlx-community publishes, `softmax_axis` for `no_speech_prob`
-(`src/decoding.rs:355`) runs in **fp16** where Python runs it in fp32. The
-sampling path is promoted to f32 only incidentally, by adding the f32 masks.
+(`src/decoding.rs:355`) ran in **fp16** where Python runs it in fp32. The
+sampling path was promoted to f32 only incidentally, by adding the f32 masks.
+
+This mattered only academically until `MODEL-3` landed the dtype knob below —
+with the encoder/decoder buffers pinned to f32 there was no fp16 activation
+for the missing cast to matter against. **Fixed** alongside `MODEL-3`: both
+`model.decoder.forward(...)` call sites in `decoding::decode` now cast
+`pre_logits` to f32 immediately, matching `Inference.logits`'s unconditional
+`.astype(mx.float32)`.
 
 ### DEC-7 — `avg_logprob` on an empty token list — RISK
 
@@ -374,14 +381,85 @@ swallowed as the positional audio file, and the *real* file that followed it
 then tripped the duplicate-file error above it. **Fixed** in this change: the
 guard is now `!s.starts_with('-')`.
 
-### MODEL-3 — no dtype/fp16 knob — RISK
+### MODEL-3 — dtype/fp16 knob — **Fixed**
 
-Python takes `dtype: mx.Dtype` and `transcribe.py` passes `mx.float16` by
-default. Rust has no dtype parameter anywhere; f32 positional embeddings and
-f32 masks get added to fp16 activations, so mlx promotes the whole encoder and
-decoder to f32. Numerically fine — arguably more accurate — but permanently
+Python takes `dtype: mx.Dtype`; `Whisper.__init__` forwards it to
+`AudioEncoder`/`TextDecoder`, which each `.astype(dtype)` the one buffer they
+compute rather than load — the encoder's sinusoidal positional embedding and
+the decoder's additive causal mask, respectively (`whisper.py:134,172-173`).
+`load_models.py` defaults `dtype` to `mx.float32`, but the real entry point,
+`transcribe.py:146`, computes `mx.float16 if decode_options.get("fp16", True)
+else mx.float32` — fp16 is upstream's effective default. Rust had no dtype
+parameter anywhere, so those two buffers were always f32 and promoted every
+fp16 weight they touched back to f32 the moment they were added — permanently
 pinned to upstream's `--fp16 False` behaviour: roughly 2× slower and 2× memory
 on Apple Silicon, with no way to opt out.
+
+**Fixed** in this change, mirroring upstream's structure rather than casting
+the weights themselves (upstream never does — `load_models.py:32-44` loads
+`weights.safetensors` as-is and hands it to `model.update(weights)`; the
+tensors are already fp16 on disk in the `mlx-community` repos):
+
+* `Whisper::new`, `AudioEncoder::new` and `TextDecoder::new` (`src/whisper.rs`)
+  now take an `mlx_rs::Dtype`. `AudioEncoder::new` casts the `sinusoids()`
+  result to it; `TextDecoder::new` casts `create_additive_causal_mask` to it.
+  `TextDecoder`'s `positional_embedding` is deliberately left as f32
+  `zeros` — like Python's `self.positional_embedding = mx.zeros(...)`, it is a
+  real loaded parameter, wholesale-overwritten by `load_models::apply_weights`
+  from the on-disk (fp16) tensor, not a computed buffer.
+* `Whisper` gained a `pub dtype: Dtype` field, set from the constructor
+  argument, mirroring how upstream code reads `self.model.dtype`.
+* `load_models::load_model` (`src/load_models.rs:299`) takes a `dtype`
+  parameter and forwards it to `Whisper::new`. It still does not cast the
+  loaded weight tensors, matching upstream, and the `quantization` `bail!` is
+  unchanged.
+* The mel spectrogram is cast to `model.dtype` right before each encoder
+  call: in `decoding::decode` (`src/decoding.rs`, mirroring
+  `DecodingTask._get_audio_features`'s `mel.astype(mx.float16)`) and in
+  `transcribe::detect_language` (`src/transcribe.rs`, mirroring
+  `transcribe.py`'s `pad_or_trim(mel, N_FRAMES, axis=-2).astype(dtype)` before
+  `model.detect_language(...)`). An uncast f32 mel would otherwise re-promote
+  the whole encoder graph at the first conv.
+* `decoding::decode`'s two `model.decoder.forward(...)` call sites now cast
+  `pre_logits` to f32 immediately afterward, matching `Inference.logits()`'s
+  unconditional `return logits.astype(mx.float32)` — so no_speech_prob, the
+  logit filters and sampling all run in f32 regardless of the model's dtype,
+  exactly as upstream's `DecodingTask._main_loop` does by construction (it
+  only ever sees `Inference.logits()`'s f32 output).
+* `examples/transcribe.rs` defaults to f16 and gained a `--fp32` flag (mirrors
+  passing `--fp16 False` on the Python CLI) so the two paths can be timed
+  against each other.
+* `MultiHeadAttention::qkv_attention` (`src/whisper.rs`) no longer multiplies
+  `q`/`k` by a bare `f32` scale. Python's `q * scale` relies on `mx.array`'s
+  weak-scalar typing — multiplying a float16 array by a raw Python number
+  keeps float16 — but mlx-rs has no such weak typing: `Array * f32` builds a
+  genuine `Dtype::Float32` scalar (`Array::from_f32`) and standard type
+  promotion turns the product to f32, silently defeating the dtype knob on
+  every attention call. Fixed by casting the scale to the operand's own dtype
+  before multiplying.
+
+**Known residual promotion, not fixed here:** `mlx_rs::nn::gelu` (0.25.3,
+`src/nn/activation.rs`'s `compiled_gelu`) divides its input by
+`array!(2f32.sqrt())`, a literal `Dtype::Float32` scalar. That mixes float16
+with float32 the same way the `qkv_attention` scale did, and standard
+promotion takes it to f32 — so `AudioEncoder::forward`'s `gelu(conv1(mel))`
+(the very first op after the first conv) and every `ResidualAttentionBlock`'s
+`gelu(mlp1(...))` re-promote the hidden state to f32 regardless of the dtype
+knob. Unlike the attention scale, this isn't fixable from inside this crate
+without reimplementing `gelu` locally with dtype-matched constants — a
+meaningfully larger change than this fix, and one that would touch
+`AudioEncoder::forward`, which another concurrent change already owns. Net
+effect: `MODEL-3`'s API and buffer-dtype threading are now correct and match
+upstream's structure, but on real fp16 checkpoints the memory/speed win is
+likely **not** fully realised yet — verify empirically with `--fp32` vs the
+default on a Mac; if the two run in near-identical time, that confirms the
+promotion above rather than a regression in this change. Revisit once mlx-rs
+gains weak-scalar typing or this crate special-cases the activation.
+
+Test call sites (`tests/model_math_parity.rs`, `tests/decoder_cache.rs`) pass
+`Dtype::Float32` explicitly — those suites check integer/offset arithmetic
+against randomly-initialised weights, not the dtype knob itself, and f32
+keeps their existing tight numeric tolerances unaffected by this change.
 
 ### MODEL-4 … MODEL-8 — RISK / DOC
 
@@ -697,10 +775,8 @@ fixing rather than documenting:
   (4000 of them random), and the full encode path reproduces all 14 tokenizer
   fixture cases.
 
-Three findings are deliberately **not** fixed:
+Two further findings are deliberately **not** fixed:
 
-* **MODEL-3** (no fp16/dtype knob) — a performance and API question rather than
-  a correctness one, and threading a dtype parameter touches every layer.
 * **MODEL-1** is *rejected*, not implemented: quantized repos now fail with an
   actionable error instead of loading garbage. Real support needs
   `QuantizedLinear` / `QuantizedEmbedding`.
@@ -828,25 +904,24 @@ audit-fix commit and the code-review pass above (`DEC-2` was a decision, now
 pinned by fixture, not a fix). What is left is what the findings above still
 mark RISK or DOC and leave open:
 
-1. `DEC-6` — cast decoder logits to f32 before any filter or softmax, matching
-   `Inference.logits`'s unconditional cast, so fp16 weights don't run
-   `no_speech_prob`'s softmax in fp16.
-2. Real quantized-model support (`MODEL-1` beyond its current rejection) —
+1. Real quantized-model support (`MODEL-1` beyond its current rejection) —
    `QuantizedLinear` / `QuantizedEmbedding`, or leave the explicit error as the
    permanent answer.
-3. `MODEL-3` (no fp16/dtype knob) — declined for now; revisit only if the 2×
-   memory/speed cost on Apple Silicon becomes a real complaint.
-4. `AUDIO-5`, `AUDIO-6`, `AUDIO-7`, `AUDIO-8` — harden the `.npy` reader and
+2. `AUDIO-5`, `AUDIO-6`, `AUDIO-7`, `AUDIO-8` — harden the `.npy` reader and
    WAV parser (header validation, `EXTENSIBLE`/24-bit formats, sample-rate
    enforcement, the `stft` frame-count underflow).
-5. The remaining `transcribe.rs`/`tokenizer.rs` items — `encode()` accepting
+3. The remaining `transcribe.rs`/`tokenizer.rs` items — `encode()` accepting
    special-token text, `Tokenizer::decode`'s `< eot` vs `< timestamp_begin`
    mismatch, `detect_language`'s mel-padding gap (same root cause as the
    already-fixed `AUDIO-2`), the anti-stall seek guard, the silence-skip
    boundary, `f32` timestamp arithmetic, `split_tokens_on_spaces`, and
    `TOK-3`'s non-deterministic upstream ordering.
-6. A golden test against Python-mlx logits for `whisper-tiny` — the only way
+4. A golden test against Python-mlx logits for `whisper-tiny` — the only way
    to cover the encoder/decoder forward passes and the `transcribe` seek loop,
    none of which any current test exercises.
-7. GPU coverage on a real Mac — CI only exercises the CPU device
+5. GPU coverage on a real Mac — CI only exercises the CPU device
    (`MLX_WHISPER_RS_TEST_CPU`).
+
+`DEC-6` and `MODEL-3` shipped together (see their sections above): the dtype
+knob and the f32 logits upcast are two halves of the same fix — one without
+the other leaves fp16 sampling numerically wrong.

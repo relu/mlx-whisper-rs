@@ -8,6 +8,11 @@
 ///   --language <lang_code>        default: auto-detect  (e.g. en, zh, ja)
 ///   --task   <transcribe|translate>  default: transcribe
 ///   --assets <dir>                default: ./assets
+///   --fp32                        load and run the model in f32 instead of the
+///                                  default f16 (upstream's `--fp16 False`; see
+///                                  PARITY.md MODEL-3) — roughly 2x slower and
+///                                  2x the memory, useful for timing the two
+///                                  paths against each other
 ///   --verbose                     print segments as they are decoded
 ///   --audio-ctx <N>               truncate encoder context to N positions (whisper.cpp -ac);
 ///                                 default: full context
@@ -23,6 +28,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use mlx_rs::Dtype;
 use mlx_whisper_rs::{
     audio::{load_audio, log_mel_spectrogram, N_SAMPLES, SAMPLE_RATE},
     load_models::load_model,
@@ -46,6 +52,10 @@ fn main() -> anyhow::Result<()> {
     let mut assets_dir = PathBuf::from("assets");
     let mut verbose = false;
     let mut audio_ctx: Option<usize> = None;
+    // Upstream's effective default (`transcribe.py`: `mx.float16 if
+    // decode_options.get("fp16", True) else mx.float32`) is fp16; `--fp32`
+    // mirrors passing `--fp16 False` on the Python CLI.
+    let mut dtype = Dtype::Float16;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -64,6 +74,7 @@ fn main() -> anyhow::Result<()> {
             "--language" | "--lang" => language = Some(take_value(&mut i)?),
             "--task" => task = take_value(&mut i)?,
             "--assets" => assets_dir = PathBuf::from(take_value(&mut i)?),
+            "--fp32" => dtype = Dtype::Float32,
             "--verbose" | "-v" => verbose = true,
             "--audio-ctx" => {
                 let v = take_value(&mut i)?;
@@ -90,7 +101,7 @@ fn main() -> anyhow::Result<()> {
         anyhow::anyhow!(
             "Audio file required\n\n\
              usage: transcribe <audio> [--model ID] [--language CODE] [--task transcribe|translate] \
-             [--assets DIR] [--verbose] [--audio-ctx N]"
+             [--assets DIR] [--fp32] [--verbose] [--audio-ctx N]"
         )
     })?;
 
@@ -100,7 +111,7 @@ fn main() -> anyhow::Result<()> {
     // ── Load model ────────────────────────────────────────────────────────────
     eprintln!("Loading model: {model_id}");
     let t0 = Instant::now();
-    let mut model = load_model(&model_id)?;
+    let mut model = load_model(&model_id, dtype)?;
     eprintln!("Model loaded in {:.1}s", t0.elapsed().as_secs_f32());
 
     // ── Load audio ────────────────────────────────────────────────────────────
@@ -224,6 +235,7 @@ fn print_help() {
            --language <code>       Language code (en, zh, ja, …)   [auto-detect]\n\
            --task   <task>         transcribe or translate          [transcribe]\n\
            --assets <dir>          Directory with *.tiktoken files  [./assets]\n\
+           --fp32                  Run in f32 instead of f16        [off]\n\
            --verbose, -v           Print segments as decoded\n\
            --audio-ctx <N>         Truncate encoder context to N positions (whisper.cpp -ac)  [full]\n\
            --help,   -h            Show this message\n\

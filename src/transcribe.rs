@@ -128,6 +128,11 @@ pub fn detect_language(
         d => anyhow::bail!("mel must be 2-D or 3-D, got {d}-D"),
     };
 
+    // Python: `mel_segment = pad_or_trim(mel, N_FRAMES, axis=-2).astype(dtype)`
+    // (`transcribe.py`, right before `model.detect_language(mel_segment)`). An
+    // f32 mel would promote the encoder's fp16 conv weights back to f32 at the
+    // first layer (PARITY.md MODEL-3).
+    let mel_batch = mel_batch.as_dtype(model.dtype)?;
     // Always encode the full context here: language ID benefits from as much
     // audio as is available, and this is unrelated to the caller-settable
     // `TranscribeOptions::audio_ctx` override used by the main decode loop.

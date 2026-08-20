@@ -310,6 +310,14 @@ pub fn decode(
     } else {
         mel.clone()
     };
+    // Python: `DecodingTask._get_audio_features` does `mel.astype(mx.float16)`
+    // (gated on `options.fp16`, which defaults `True`) immediately before the
+    // encoder call, as a second line of defence on top of the cast
+    // `transcribe.py` already applies per segment. An f32 mel hitting fp16
+    // conv weights at `conv1` would promote the whole encoder graph back to
+    // f32 (PARITY.md MODEL-3), so `decode()` — the one path every caller,
+    // internal or external, funnels a mel through — enforces it here too.
+    let mel_batch = mel_batch.as_dtype(model.dtype)?;
     // [1, audio_ctx.unwrap_or(n_audio_ctx), n_audio_state]
     let audio_features = model.encoder.forward(&mel_batch, options.audio_ctx)?;
 
@@ -408,6 +416,13 @@ pub fn decode(
         let tokens_i32: Vec<i32> = tokens.iter().map(|&t| t as i32).collect();
         let tokens_arr = Array::from_slice(&tokens_i32, &[1, tokens.len() as i32]);
         let (pre_logits, new_cache, _) = model.decoder.forward(&tokens_arr, &audio_features, None)?;
+        // Python's `Inference.logits()` returns `logits.astype(mx.float32)`
+        // unconditionally, so every consumer downstream of it — the
+        // no_speech_prob softmax, the logit filters, sampling — runs in f32
+        // regardless of the model's dtype. Under fp16 activations, skipping
+        // this changes sampling, temperature fallback and the reported
+        // logprob / no_speech_prob numbers.
+        let pre_logits = pre_logits.as_type::<f32>()?;
 
         // [1, seq_len, n_vocab] → [seq_len, n_vocab]
         let l2d = pre_logits.index((0i32,));
@@ -440,6 +455,9 @@ pub fn decode(
         let (pre_logits, new_cache, _) =
             model.decoder.forward(&last_arr, &audio_features, kv_cache)?;
         kv_cache = Some(new_cache);
+        // See the matching comment on step 1 above: `Inference.logits()`
+        // upcasts to f32 before anything else touches the logits.
+        let pre_logits = pre_logits.as_type::<f32>()?;
 
         // [1, 1, n_vocab] → [n_vocab]
         let logits = pre_logits.index((0i32,)).index((0i32,));

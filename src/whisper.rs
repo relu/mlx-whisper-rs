@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use mlx_rs::{
-    Array,
+    Array, Dtype,
     builder::Builder,
     module::Module,
     nn::{Conv1d, Conv1dBuilder, Embedding, LayerNorm, Linear, LinearBuilder,
@@ -126,14 +126,26 @@ impl MultiHeadAttention {
         let head_dim = n_state / nh;
         let scale = (head_dim as f32).powf(-0.25f32);
 
+        // Python's `q * scale` (`scale` a plain float) relies on `mx.array`'s
+        // weak-scalar typing: multiplying a float16 array by a raw Python
+        // number keeps float16. mlx-rs has no such weak typing — `Array *
+        // f32` (`ScalarOrArray for f32`) builds a genuine `Dtype::Float32`
+        // scalar via `Array::from_f32`, and multiplying that against an fp16
+        // `q`/`k` promotes the result to f32 by ordinary type promotion,
+        // silently undoing the dtype knob (PARITY.md MODEL-3) on every
+        // attention call. Cast the scalar to the operand's own dtype first so
+        // the multiply is same-dtype and fp16 survives.
+
         // q: [B, n_ctx, n_state] → [B, n_head, n_ctx, head_dim]
         let q = q.reshape(&[n_batch, n_ctx, nh, -1])?
-            .transpose_axes(&[0, 2, 1, 3])? * scale;
+            .transpose_axes(&[0, 2, 1, 3])?;
+        let q = &q * &Array::from_f32(scale).as_dtype(q.dtype())?;
 
         // k: [B, n_kv, n_state] → [B, n_head, head_dim, n_kv]
         let kl = k.shape()[1];
         let k = k.reshape(&[n_batch, kl, nh, -1])?
-            .transpose_axes(&[0, 2, 3, 1])? * scale;
+            .transpose_axes(&[0, 2, 3, 1])?;
+        let k = &k * &Array::from_f32(scale).as_dtype(k.dtype())?;
 
         // v: [B, n_kv, n_state] → [B, n_head, n_kv, head_dim]
         let v = v.reshape(&[n_batch, kl, nh, -1])?
@@ -243,13 +255,19 @@ impl AudioEncoder {
         n_state: usize,
         n_head: usize,
         n_layer: usize,
+        dtype: Dtype,
     ) -> Result<Self> {
         let nm = n_mels as i32;
         let ns = n_state as i32;
         Ok(Self {
             conv1: Conv1dBuilder::new(nm, ns, 3).padding(1).build()?,
             conv2: Conv1dBuilder::new(ns, ns, 3).stride(2).padding(1).build()?,
-            positional_embedding: sinusoids(n_ctx, n_state)?,
+            // Python: `sinusoids(n_ctx, n_state).astype(dtype)`. `sinusoids()`
+            // itself stays f32-only (trig ops), so the cast happens here, right
+            // where upstream applies it — before this buffer is ever added to
+            // fp16 conv activations, which would otherwise promote the whole
+            // encoder graph back to f32 (PARITY.md MODEL-3).
+            positional_embedding: sinusoids(n_ctx, n_state)?.as_dtype(dtype)?,
             blocks: (0..n_layer)
                 .map(|_| ResidualAttentionBlock::new(n_state, n_head, false))
                 .collect::<Result<Vec<_>>>()?,
@@ -332,18 +350,29 @@ impl TextDecoder {
         n_state: usize,
         n_head: usize,
         n_layer: usize,
+        dtype: Dtype,
     ) -> Result<Self> {
         let nv = n_vocab as i32;
         let nc = n_ctx as i32;
         let ns = n_state as i32;
         Ok(Self {
             token_embedding: Embedding::new(nv, ns)?,
+            // Left as f32 zeros, uncast: this is a real learned parameter, not a
+            // computed buffer, so `load_models::apply_weights` overwrites it
+            // wholesale with the (already fp16-on-disk) loaded tensor. Upstream
+            // agrees — `TextDecoder.__init__` never calls `.astype(dtype)` on
+            // `self.positional_embedding`, only on `self._mask` below.
             positional_embedding: zeros::<f32>(&[nc, ns])?,
             blocks: (0..n_layer)
                 .map(|_| ResidualAttentionBlock::new(n_state, n_head, true))
                 .collect::<Result<Vec<_>>>()?,
             ln: LayerNorm::new(ns)?,
-            mask: MHAnn::create_additive_causal_mask::<f32>(nc)?,
+            // Python: `create_additive_causal_mask(n_ctx).astype(dtype)`. This
+            // buffer is never part of the loaded weights (Python stores it as
+            // `self._mask`, excluded from the parameter tree), so unlike the
+            // positional embedding above it must be cast explicitly or it stays
+            // f32 forever and promotes every attention score it's added to.
+            mask: MHAnn::create_additive_causal_mask::<f32>(nc)?.as_dtype(dtype)?,
         })
     }
 
@@ -410,10 +439,23 @@ pub struct Whisper {
     pub decoder: TextDecoder,
     /// Shape [n_pairs, 2] — (layer, head) pairs for alignment
     pub alignment_heads: Array,
+    /// The dtype the encoder's positional embedding and the decoder's causal
+    /// mask were built in (see `AudioEncoder::new` / `TextDecoder::new`).
+    /// Upstream reads `self.model.dtype` off the model the same way to decide
+    /// what to cast each mel segment to before encoding it — see
+    /// `transcribe::detect_language` and `decoding::decode`.
+    pub dtype: Dtype,
 }
 
 impl Whisper {
-    pub fn new(dims: ModelDimensions) -> Result<Self> {
+    /// `dtype` mirrors upstream's `Whisper.__init__(self, dims, dtype=mx.float16)`:
+    /// it decides the dtype of the encoder's sinusoidal positional embedding
+    /// and the decoder's additive causal mask (the two buffers that are
+    /// computed rather than loaded from weights — see PARITY.md MODEL-3).
+    /// Model weights themselves are untouched here; they take on whatever
+    /// dtype the checkpoint was saved in once `load_models::load_model` applies
+    /// them.
+    pub fn new(dims: ModelDimensions, dtype: Dtype) -> Result<Self> {
         // alignment_heads = nonzero positions where last-half layers are True
         let half = dims.n_text_layer / 2;
         let pairs: Vec<i32> = (half..dims.n_text_layer)
@@ -429,6 +471,7 @@ impl Whisper {
                 dims.n_audio_state,
                 dims.n_audio_head,
                 dims.n_audio_layer,
+                dtype,
             )?,
             decoder: TextDecoder::new(
                 dims.n_vocab,
@@ -436,8 +479,10 @@ impl Whisper {
                 dims.n_text_state,
                 dims.n_text_head,
                 dims.n_text_layer,
+                dtype,
             )?,
             alignment_heads,
+            dtype,
             dims,
         })
     }
