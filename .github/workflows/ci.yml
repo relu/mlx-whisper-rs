@@ -94,5 +94,5 @@ jobs:
             echo ""
             echo "MLX is pinned to the CPU device here — GitHub's macOS runners"
             echo "have paravirtualised Metal, where MLX GPU work aborts."
-            echo "See [PARITY.md](../blob/${{ github.sha }}/PARITY.md)."
+            echo "See [PARITY.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.sha }}/PARITY.md)."
           } >> "$GITHUB_STEP_SUMMARY"

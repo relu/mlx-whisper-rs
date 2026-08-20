@@ -85,7 +85,13 @@ pub fn hanning(size: usize) -> Array {
 /// 從 .npy 檔案讀取（由 assets/mel_filters_80.npy 等提供）
 /// 對應 Python: mel_filters(n_mels)
 pub fn mel_filters(n_mels: usize, assets_dir: &std::path::Path) -> Result<Array> {
-    assert!(n_mels == 80 || n_mels == 128, "n_mels must be 80 or 128");
+    // `n_mels` comes from a downloaded `config.json` via `model.dims.n_mels`,
+    // so a bad model repo must produce an actionable `Err` rather than unwind a
+    // panic through the library boundary — the same contract as the other
+    // asset-validation failures in this file.
+    if n_mels != 80 && n_mels != 128 {
+        bail!("n_mels must be 80 or 128, got {n_mels} (from the model's config.json)");
+    }
     let path = assets_dir.join(format!("mel_filters_{n_mels}.npy"));
     load_npy_f32(&path, &[n_mels as i32, (N_FFT / 2 + 1) as i32])
 }

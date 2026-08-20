@@ -22,6 +22,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # and `compression_ratio` feeds a hard 2.4 threshold, so a few bytes of
 # difference flips the temperature-fallback decision on borderline segments.
 flate2 = { version = "1", default-features = false, features = ["zlib"] }
+# tiktoken's pre-tokenization pattern keys on `\p{L}` and `\p{N}`, the raw
+# Unicode *general categories*. `char::is_alphabetic` is the derived
+# `Alphabetic` property instead — wider by `Nl` and `Other_Alphabetic`, which
+# covers Indic combining vowel signs — so it splits `कि` differently from
+# tiktoken and yields different token ids.
+unicode-general-category = "1.1.0"
 
 [dev-dependencies]
 hound = "3"

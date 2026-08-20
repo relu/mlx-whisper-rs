@@ -160,7 +160,17 @@ pub fn audio_from_wav_bytes(bytes: &[u8]) -> Result<(Array, u32)>
 pub fn audio_from_pcm_s16le(pcm_bytes: &[u8]) -> Array
 
 // Compute log-Mel spectrogram (n_mels: 80 or 128)
-pub fn log_mel_spectrogram(audio: Array, n_mels: usize, assets_dir: &Path) -> Result<Array>
+//
+// `padding` is a number of zero samples appended to `audio` *before* the STFT.
+// Pass `N_SAMPLES` (30 s) as `transcribe` does, so the tail of the last window
+// is real mel-of-silence rather than a literal 0.0 in normalised log space;
+// pass 0 only when the caller has already padded.
+pub fn log_mel_spectrogram(
+    audio: Array,
+    n_mels: usize,
+    assets_dir: &Path,
+    padding: usize,
+) -> Result<Array>
 
 // Trim or zero-pad to exact length along axis 0
 pub fn pad_or_trim(array: Array, length: usize) -> Result<Array>

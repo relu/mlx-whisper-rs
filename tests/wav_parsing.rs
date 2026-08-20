@@ -133,10 +133,16 @@ fn rejects_truncated_fmt_chunk_without_panicking() {
 #[test]
 fn rejects_truncated_header_prefixes() {
     common::init_device();
-    // Every prefix of a valid file must fail cleanly rather than panic.
+    // Every prefix of a valid file must fail cleanly rather than panic — and
+    // *fail*, not succeed with a garbage sample rate. The canonical header this
+    // helper writes is exactly 44 bytes, so every prefix below that is short of
+    // a complete `fmt `/`data` pair and has no valid parse.
     let full = wav(1, 1, SAMPLE_RATE as u32, 16, &s16(&[1, 2, 3, 4]));
     for len in 0..full.len().min(44) {
-        let _ = audio_from_wav_bytes(&full[..len]);
+        assert!(
+            audio_from_wav_bytes(&full[..len]).is_err(),
+            "a {len}-byte prefix of a 44-byte header must return Err"
+        );
     }
 }
 

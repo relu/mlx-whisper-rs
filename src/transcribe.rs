@@ -316,9 +316,13 @@ pub fn transcribe(
     // ── Prepare initial prompt tokens ───────────────────────────────────────
     let mut all_tokens: Vec<u32> = Vec::new();
     let mut prompt_reset_since = 0usize;
+    // Remembered here rather than re-encoded after the loop: the prompt is fed
+    // through BPE exactly once, and the two encodes cannot drift apart.
+    let mut initial_prompt_len = 0usize;
 
     if let Some(ref init_prompt) = options.initial_prompt {
         let pt = tokenizer.encode(&format!(" {}", init_prompt.trim()));
+        initial_prompt_len = pt.len();
         all_tokens.extend_from_slice(&pt);
         prompt_reset_since = 0; // include initial prompt always
     }
@@ -417,15 +421,25 @@ pub fn transcribe(
                 }
                 let start_ts = sliced[0].saturating_sub(ts_begin) as f32;
                 let end_ts = sliced[sliced.len() - 1].saturating_sub(ts_begin) as f32;
+                // `< eot`, not `< ts_begin`: upstream's `new_segment` keeps only
+                // tokens below EOT, so every special token — language ids and
+                // `<|notimestamps|>` included, which sit between EOT and
+                // `timestamp_begin` — is dropped rather than decoded into the
+                // segment text as a literal `<|xx|>`.
                 let text_tokens: Vec<u32> = sliced.iter().copied()
-                    .filter(|&t| t < ts_begin)
+                    .filter(|&t| t < tokenizer.eot())
                     .collect();
                 current_segments.push(Segment {
                     id: all_segments.len() + current_segments.len(),
                     seek: previous_seek,
                     start: time_offset + start_ts * time_precision,
                     end: time_offset + end_ts * time_precision,
-                    text: tokenizer.decode(&text_tokens).trim().to_string(),
+                    // Not trimmed: upstream returns `tokenizer.decode(...)`
+                    // verbatim, which keeps Whisper's conventional leading
+                    // space. Trimming here made every segment byte-different
+                    // from the Python reference and lost the inter-segment
+                    // spacing when segments are concatenated.
+                    text: tokenizer.decode(&text_tokens),
                     tokens: sliced.to_vec(),
                     temperature: result.temperature,
                     avg_logprob: result.avg_logprob,
@@ -456,14 +470,14 @@ pub fn transcribe(
                 }
             }
             let text_tokens: Vec<u32> = tokens.iter().copied()
-                .filter(|&t| t < ts_begin)
+                .filter(|&t| t < tokenizer.eot())
                 .collect();
             current_segments.push(Segment {
                 id: all_segments.len(),
                 seek: previous_seek,
                 start: time_offset,
                 end: time_offset + duration,
-                text: tokenizer.decode(&text_tokens).trim().to_string(),
+                text: tokenizer.decode(&text_tokens),
                 tokens: tokens.clone(),
                 temperature: result.temperature,
                 avg_logprob: result.avg_logprob,
@@ -486,18 +500,24 @@ pub fn transcribe(
             }
         }
 
-        // Drop empty/whitespace-only segments *before* accumulating.
+        // Clear blank/instantaneous segments *before* accumulating.
         //
-        // Upstream clears a blank segment's `tokens` before extending
-        // `all_tokens`, so blank segments never reach the prompt-conditioning
-        // buffer nor the final text. Accumulating first and filtering after
-        // lets them contaminate `all_tokens[prompt_reset_since..]`, which is
-        // fed as <|startofprev|> context to every later window — an error that
-        // compounds across a long file.
-        let current_segments: Vec<Segment> = current_segments
-            .into_iter()
-            .filter(|s| s.start < s.end && !s.text.is_empty())
-            .collect();
+        // Upstream empties a blank segment's `text` and `tokens` in place and
+        // keeps the segment itself, so the id sequence stays stable across a
+        // blank window. Dropping the entry instead diverged from the reference
+        // in both segment count and ids.
+        //
+        // The ordering matters independently of that: clearing has to happen
+        // before `all_tokens` is extended, or blank segments contaminate
+        // `all_tokens[prompt_reset_since..]`, which is fed as <|startofprev|>
+        // context to every later window — an error that compounds across a
+        // long file.
+        for seg in &mut current_segments {
+            if seg.start == seg.end || seg.text.trim().is_empty() {
+                seg.text.clear();
+                seg.tokens.clear();
+            }
+        }
 
         // ── Accumulate tokens for condition_on_previous_text ────────────────
         for seg in &current_segments {
@@ -517,22 +537,13 @@ pub fn transcribe(
     }
 
     // ── Assemble full text ──────────────────────────────────────────────────
-    // Re-index segment IDs sequentially
-    for (i, seg) in all_segments.iter_mut().enumerate() {
-        seg.id = i;
-    }
-
-    // Decode all accumulated tokens (excluding the initial prompt) for the full text
-    let initial_prompt_len = if options.initial_prompt.is_some() {
-        // The initial prompt tokens were prepended before the loop
-        // Find where the loop tokens start by subtracting initial prompt length
-        all_tokens
-            .len()
-            .min(tokenizer.encode(&format!(" {}", options.initial_prompt.as_deref().unwrap_or("").trim())).len())
-    } else {
-        0
-    };
-    let full_text = tokenizer.decode(&all_tokens[initial_prompt_len..]).trim().to_string();
+    // Segment ids are assigned at construction from `all_segments.len()`, and
+    // nothing is dropped any more, so they are already 0..n in order — the old
+    // re-indexing pass only existed to close the gaps left by the drop filter.
+    //
+    // Not trimmed, matching upstream's
+    // `tokenizer.decode(all_tokens[len(initial_prompt_tokens):])`.
+    let full_text = tokenizer.decode(&all_tokens[initial_prompt_len..]);
 
     Ok(TranscribeResult {
         text: full_text,

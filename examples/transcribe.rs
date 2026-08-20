@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use mlx_whisper_rs::{
-    audio::{load_audio, SAMPLE_RATE},
+    audio::{load_audio, log_mel_spectrogram, N_SAMPLES, SAMPLE_RATE},
     load_models::load_model,
     tokenizer::LANGUAGES,
     transcribe::{detect_language, transcribe, TranscribeOptions},
@@ -62,7 +62,11 @@ fn main() -> anyhow::Result<()> {
             "--task" => task = take_value(&mut i)?,
             "--assets" => assets_dir = PathBuf::from(take_value(&mut i)?),
             "--verbose" | "-v" => verbose = true,
-            s if !s.starts_with("--") => {
+            // Anything that does not start with `-` is the positional audio
+            // file. Matching on `!starts_with("--")` instead used to swallow a
+            // mistyped short flag (`-x`) as the audio file, so the *real* file
+            // that followed it tripped the duplicate-file error below.
+            s if !s.starts_with('-') => {
                 if audio_file.is_some() {
                     anyhow::bail!("Only one audio file may be given (got a second: {s})");
                 }
@@ -99,7 +103,12 @@ fn main() -> anyhow::Result<()> {
     // ── Detect language (if not specified) ────────────────────────────────────
     if language.is_none() && model.is_multilingual() {
         eprintln!("Detecting language…");
-        let (lang, probs) = detect_language(&mut model, &audio, &assets_dir)?;
+        // `detect_language` takes a *mel spectrogram*, not a waveform; passing
+        // `audio` straight through fails with "mel must be 2-D or 3-D, got
+        // 1-D". Pad exactly as `transcribe` does so the 30-second window fed to
+        // the encoder here is the same one it will use internally.
+        let mel = log_mel_spectrogram(audio.clone(), model.dims.n_mels, &assets_dir, N_SAMPLES)?;
+        let (lang, probs) = detect_language(&mut model, &mel, &assets_dir)?;
         let lang_name = LANGUAGES.iter()
             .find(|(c, _)| *c == lang)
             .map(|(_, n)| *n)
@@ -132,8 +141,12 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     if !verbose {
-        // Print segments with timestamps
-        for seg in &result.segments {
+        // Print segments with timestamps.
+        //
+        // Blank and instantaneous segments are kept in `result.segments` with
+        // their text cleared, matching upstream's return value; it is the
+        // presentation layer that skips them, as `mlx_whisper`'s writers do.
+        for seg in result.segments.iter().filter(|s| !s.text.trim().is_empty()) {
             println!(
                 "[{} --> {}]  {}",
                 fmt_ts(seg.start),

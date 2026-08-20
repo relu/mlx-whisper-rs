@@ -188,15 +188,37 @@ impl Encoding {
 /// lowercase-only contraction list produce different output for `"don't"` and
 /// `"DON'T"`.
 ///
-/// Note `\p{L}` / `\p{N}` are approximated by `char::is_alphabetic` /
-/// `char::is_numeric`. Those are the Unicode *derived* properties, marginally
-/// wider than the raw categories (`Alphabetic` also covers `Nl` and
-/// `Other_Alphabetic`), so exotic scripts could still split differently.
+/// `\p{L}` and `\p{N}` are the raw Unicode **general categories**, tested here
+/// via `unicode_general_category`. `char::is_alphabetic` is the derived
+/// `Alphabetic` property and is wider: it also covers `Nl` and
+/// `Other_Alphabetic`, the latter including Indic combining vowel signs. Under
+/// that approximation Hindi `कि` (`क` = `Lo`, `ि` = `Mc`) came out as a single
+/// ` ?\p{L}+` piece, where the real pattern takes `क` as a letter run and `ि`
+/// as a `[^\s\p{L}\p{N}]+` run — two pieces, different BPE merges, different
+/// token ids.
 fn split_tiktoken_pieces(text: &str) -> Vec<String> {
+    use unicode_general_category::{get_general_category, GeneralCategory as G};
+
     let chars: Vec<char> = text.chars().collect();
     let n = chars.len();
-    let is_alpha = |c: char| c.is_alphabetic();
-    let is_num = |c: char| c.is_numeric();
+    // \p{L} — Lu, Ll, Lt, Lm, Lo
+    let is_alpha = |c: char| {
+        matches!(
+            get_general_category(c),
+            G::UppercaseLetter
+                | G::LowercaseLetter
+                | G::TitlecaseLetter
+                | G::ModifierLetter
+                | G::OtherLetter
+        )
+    };
+    // \p{N} — Nd, Nl, No
+    let is_num = |c: char| {
+        matches!(
+            get_general_category(c),
+            G::DecimalNumber | G::LetterNumber | G::OtherNumber
+        )
+    };
     let is_ws = |c: char| c.is_whitespace();
     let is_other = |c: char| !is_ws(c) && !is_alpha(c) && !is_num(c);
 
@@ -549,4 +571,46 @@ pub fn get_tokenizer(
     let encoding = Encoding::from_tiktoken_file(&vocab_path, encoding_name, num_languages)?;
 
     Tokenizer::new(encoding, num_languages, language, task)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::split_tiktoken_pieces;
+
+    fn split(text: &str) -> Vec<String> {
+        split_tiktoken_pieces(text)
+    }
+
+    /// `\p{L}` is the general category `L*`, not the derived `Alphabetic`
+    /// property. U+093F DEVANAGARI VOWEL SIGN I is `Mc`: `Alphabetic` (via
+    /// `Other_Alphabetic`) but *not* a letter, so tiktoken's pattern takes it
+    /// with the `[^\s\p{L}\p{N}]+` alternative rather than folding it into the
+    /// preceding letter run.
+    #[test]
+    fn combining_marks_are_not_letters() {
+        assert_eq!(split("\u{0915}\u{093F}"), vec!["\u{0915}", "\u{093F}"]);
+    }
+
+    /// U+2160 ROMAN NUMERAL ONE is `Nl`: matched by `\p{N}`, and also by
+    /// `Alphabetic`. Under the old `char::is_alphabetic` approximation the
+    /// letter alternative won and split it away from the digit that follows.
+    #[test]
+    fn letter_numbers_are_numbers() {
+        assert_eq!(split("\u{2160}2"), vec!["\u{2160}2"]);
+    }
+
+    /// The ordinary paths must be unaffected by the category change.
+    #[test]
+    fn ascii_splitting_is_unchanged() {
+        assert_eq!(split(" hello"), vec![" hello"]);
+        assert_eq!(split("abc123"), vec!["abc", "123"]);
+        assert_eq!(split("don't"), vec!["don", "'t"]);
+        // The contraction alternatives are lowercase-only, so the uppercase
+        // form falls through to the punctuation and letter branches.
+        assert_eq!(split("DON'T"), vec!["DON", "'", "T"]);
+        // `\s+(?!\S)` backtracks one character, leaving it for the next piece.
+        assert_eq!(split(" a  b"), vec![" a", " ", " b"]);
+    }
 }

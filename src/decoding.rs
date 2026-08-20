@@ -102,6 +102,53 @@ fn apply_suppress_tokens(logits: &Array, mask: &Array) -> Array {
     logits + mask
 }
 
+/// The token ids `SuppressTokens` masks, or `None` when upstream would not
+/// install the filter at all.
+///
+/// Mirrors `DecodingTask._get_suppress_tokens` plus the `if
+/// self.options.suppress_tokens:` guard that decides whether the resulting
+/// filter is appended:
+///
+/// * `None` / `Some("")` — falsy in Python, so *no* filter, not even the
+///   control tokens (`DEC-4`);
+/// * the `-1` sentinel adds `non_speech_tokens` **on top of** every explicit
+///   non-negative id, rather than replacing them (`DEC-3`);
+/// * the control tokens are appended to any non-empty set.
+///
+/// Returned sorted and deduplicated, matching upstream's
+/// `tuple(sorted(set(...)))`.
+fn suppress_token_ids(tokenizer: &Tokenizer, suppress_tokens: Option<&str>) -> Option<Vec<u32>> {
+    let spec = match suppress_tokens {
+        Some(s) if !s.is_empty() => s,
+        _ => return None,
+    };
+
+    let mut ids: Vec<u32> = Vec::new();
+    let parsed: Vec<i64> = spec
+        .split(',')
+        .filter_map(|x| x.trim().parse().ok())
+        .collect();
+    ids.extend(parsed.iter().filter(|&&t| t >= 0).map(|&t| t as u32));
+    if parsed.contains(&-1) {
+        ids.extend(tokenizer.non_speech_tokens());
+    }
+
+    ids.push(tokenizer.transcribe_token());
+    ids.push(tokenizer.translate_token());
+    ids.push(tokenizer.sot());
+    ids.push(tokenizer.no_speech());
+    if let Some(&id) = tokenizer.special_tokens.get("<|startofprev|>") {
+        ids.push(id);
+    }
+    if let Some(&id) = tokenizer.special_tokens.get("<|startoflm|>") {
+        ids.push(id);
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    Some(ids)
+}
+
 /// ApplyTimestampRules: enforce timestamp token pairing and ordering constraints.
 fn apply_timestamp_rules(
     logits: &Array,
@@ -137,9 +184,15 @@ fn apply_timestamp_rules(
         }
     }
 
-    // Timestamps must not decrease; also force non-zero segment length
+    // Timestamps must not decrease; also force non-zero segment length.
+    //
+    // `>=`, not `>`: openai/whisper selects with `sampled_tokens.ge(ts_begin)`,
+    // so `<|0.00|>` (== ts_begin) counts as a timestamp here. Excluding it left
+    // the clause inert for a sequence like `[<|0.00|>, "hello"]` — `timestamps`
+    // came out empty, nothing was masked, and `<|0.00|>` could be re-selected
+    // straight after the text for a duplicate zero-span segment.
     let timestamps: Vec<usize> = seq.iter()
-        .filter(|&&t| t as usize > ts_begin)
+        .filter(|&&t| t as usize >= ts_begin)
         .map(|&t| t as usize)
         .collect();
     if !timestamps.is_empty() {
@@ -287,45 +340,25 @@ pub fn decode(
         None
     };
 
-    // SuppressTokens: always-on token suppression
-    let suppress_mask_arr: Array = {
-        let mut suppress_ids: Vec<u32> = Vec::new();
-
-        if let Some(ref s) = options.suppress_tokens {
-            let parsed: Vec<i64> = s.split(',')
-                .filter_map(|x| x.trim().parse().ok())
-                .collect();
-            // Upstream keeps every non-negative id *and* adds the non-speech
-            // set when the -1 sentinel is present; it is not an either/or, so
-            // "-1,50257" suppresses 50257 too.
-            suppress_ids.extend(parsed.iter().filter(|&&t| t >= 0).map(|&t| t as u32));
-            if parsed.contains(&-1) {
-                suppress_ids.extend(tokenizer.non_speech_tokens());
-            }
-        }
-
-        // Always suppress these control tokens
-        suppress_ids.push(tokenizer.transcribe_token());
-        suppress_ids.push(tokenizer.translate_token());
-        suppress_ids.push(tokenizer.sot());
-        suppress_ids.push(tokenizer.no_speech());
-        if let Some(&id) = tokenizer.special_tokens.get("<|startofprev|>") {
-            suppress_ids.push(id);
-        }
-        if let Some(&id) = tokenizer.special_tokens.get("<|startoflm|>") {
-            suppress_ids.push(id);
-        }
-
-        Array::from_slice(&build_mask(&suppress_ids, n_vocab), &[n_vocab as i32])
-    };
+    // SuppressTokens: installed only when the option is truthy — see
+    // `suppress_token_ids`.
+    let suppress_mask_arr: Option<Array> =
+        suppress_token_ids(tokenizer, options.suppress_tokens.as_deref())
+            .map(|ids| Array::from_slice(&build_mask(&ids, n_vocab), &[n_vocab as i32]));
 
     // max_initial_timestamp_index: how many 0.02s steps the initial timestamp may be
+    //
+    // `filter(|&t| t != 0.0)`: upstream guards with `if
+    // self.options.max_initial_timestamp:`, where `0.0` is falsy and therefore
+    // means *no cap*. Treating `Some(0.0)` as a cap of index 0 inverted that —
+    // it pinned the first timestamp of every window to exactly 0.00 s.
+    // (A negative value is nonsense either way; it clamps to index 0 here.)
     let max_ts_index: Option<usize> = if options.without_timestamps {
         None
     } else {
-        options.max_initial_timestamp.map(|t| {
+        options.max_initial_timestamp.filter(|&t| t != 0.0).map(|t| {
             let precision = CHUNK_LENGTH as f32 / n_audio_ctx as f32; // typically 0.02s
-            (t / precision).round() as usize
+            (t / precision).round().max(0.0) as usize
         })
     };
 
@@ -341,7 +374,10 @@ pub fn decode(
                 Some(mask) => apply_suppress_blank(&logits, tokens.len(), sample_begin, mask),
                 None => logits,
             };
-            let logits = apply_suppress_tokens(&logits, &suppress_mask_arr);
+            let logits = match &suppress_mask_arr {
+                Some(mask) => apply_suppress_tokens(&logits, mask),
+                None => logits,
+            };
             let logits = if !options.without_timestamps {
                 apply_timestamp_rules(&logits, &tokens, sample_begin, tokenizer, max_ts_index)?
             } else {
@@ -403,11 +439,12 @@ pub fn decode(
     let result_tokens: Vec<u32> = generated[..end].to_vec();
 
     let text = tokenizer.decode(&result_tokens).trim().to_string();
-    let avg_logprob = if result_tokens.is_empty() {
-        f32::NEG_INFINITY
-    } else {
-        sum_logprobs / (result_tokens.len() + 1) as f32
-    };
+    // `sum_logprobs / (len + 1)` unconditionally, exactly as upstream.
+    // Special-casing the empty list to -inf forced `decode_with_fallback` to
+    // climb the whole temperature ladder for a window whose first token is EOT
+    // (reachable with `suppress_blank: false`), where upstream divides by 1 and
+    // usually accepts the first temperature.
+    let avg_logprob = sum_logprobs / (result_tokens.len() + 1) as f32;
 
     Ok(DecodingResult {
         language: tokenizer.language.clone().unwrap_or_else(|| "en".to_string()),
@@ -425,72 +462,37 @@ pub fn decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_common as common;
     use crate::tokenizer::get_tokenizer;
-    use std::path::{Path, PathBuf};
 
     /// Real Whisper multilingual vocabulary size (large-v3 family).
     const N_VOCAB: usize = 51866;
 
-    /// Pin MLX to the CPU device when `MLX_WHISPER_RS_TEST_CPU` is set.
-    ///
-    /// GitHub's macOS runners are VMs with paravirtualised Metal; dispatching
-    /// GPU work there aborts the process with an `AppleParavirtCommandBuffer`
-    /// assertion, and since that is a SIGABRT it takes down the whole test
-    /// binary. The fixtures are all device-independent, so the CPU backend is
-    /// numerically equivalent. Opt-in, so a real Mac still covers the GPU path.
     fn init_device() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            if std::env::var_os("MLX_WHISPER_RS_TEST_CPU").is_some() {
-                mlx_rs::Device::set_default(&mlx_rs::Device::cpu());
-            }
-        });
-    }
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+        common::init_device();
     }
 
     /// Tokenizer assets are ~1.6 MB and are not committed; tests that need real
     /// BPE skip themselves rather than fail on a fresh clone.
     /// Run `python3 tools/extract_assets.py` to populate `assets/`.
     fn tokenizer() -> Option<Tokenizer> {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
-        if !dir.join("multilingual.tiktoken").exists() {
-            eprintln!("SKIP: run `python3 tools/extract_assets.py` to populate assets/");
-            return None;
-        }
+        let dir = common::require_assets()?;
         get_tokenizer(true, 99, Some("en"), Some("transcribe"), &dir).ok()
     }
 
-    /// The same LCG stream `tools/gen_fixtures.py` uses, so Rust and Python
-    /// filter the identical logits without committing a 400 KiB blob.
+    /// Row 0 of the fixture's synthetic logits: the "text dominant" variant.
+    /// Pushing the timestamp region down keeps the final logsumexp rule from
+    /// firing, so the earlier clauses stay observable instead of being buried
+    /// under an all-`-inf` row.
     fn synth_logits_row0(n_vocab: usize, ts_begin: usize) -> Vec<f32> {
-        let mut all = Vec::with_capacity(n_vocab);
-        let mut state: u64 = 12345;
-        for _ in 0..n_vocab {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            let u = (state >> 40) as f32 / (1u32 << 24) as f32;
-            all.push(u * 16.0 - 8.0);
-        }
-        // Row 0 is the "text dominant" variant: pushing the timestamp region
-        // down keeps the final logsumexp rule from firing, so the earlier
-        // clauses stay observable instead of being buried under an all-`-inf`
-        // row.
-        for v in all.iter_mut().skip(ts_begin) {
-            *v -= 12.0;
-        }
-        all
+        common::synth_logits(1, n_vocab, LCG_SEED, ts_begin)
     }
 
+    /// The seed `tools/gen_fixtures.py` records as `lcg_seed`.
+    const LCG_SEED: u64 = 12345;
+
     fn neg_inf_indices(row: &[f32]) -> Vec<usize> {
-        row.iter()
-            .enumerate()
-            .filter(|(_, v)| v.is_infinite() && v.is_sign_negative())
-            .map(|(i, _)| i)
-            .collect()
+        common::expand_ranges(&common::neg_inf_ranges(row))
     }
 
     // ── compression_ratio ────────────────────────────────────────────────
@@ -528,9 +530,7 @@ mod tests {
         // zlib (`features = ["zlib"]`) rather than to loosen the tolerance —
         // the 2.4 hallucination threshold is a cliff, and a few bytes either
         // way flips real segments.
-        let text = std::fs::read_to_string(fixtures().join("text_metrics.json"))
-            .expect("fixture text_metrics.json");
-        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let doc = common::json("text_metrics");
 
         for case in doc["compression_ratio"].as_array().unwrap() {
             let s = case["text"].as_str().unwrap();
@@ -857,5 +857,177 @@ mod tests {
             (sum_logprobs - want).abs() < 1e-5,
             "expected ln(0.5) = {want}, got {sum_logprobs}"
         );
+    }
+
+    // ── Golden fixtures: tests/fixtures/logit_filters.json ───────────────
+    //
+    // The hand-written tests above pin individual clauses. These pin the whole
+    // filter against expectations measured in Python, which is what makes the
+    // fixture load-bearing rather than decorative — without them the fixture
+    // could be deleted and nothing would fail.
+    //
+    // `timestamp_rules_port_semantics` is the set to assert against: this port
+    // is a documented hybrid — `mlx_whisper`'s unmasked normalisation for the
+    // final timestamp-vs-text rule (`DEC-1`), `openai/whisper`'s value-based
+    // `>=` monotonicity clause (`DEC-2`) — so neither of the two upstream sets
+    // describes it. See `tools/reference_rules.py` and `PARITY.md`.
+
+    fn logit_filters() -> serde_json::Value {
+        common::json("logit_filters")
+    }
+
+    #[test]
+    fn fixture_constants_match_the_tokenizer() {
+        init_device();
+        let Some(tk) = tokenizer() else { return };
+        let doc = logit_filters();
+
+        // If these drift, every other fixture assertion below is vacuous.
+        assert_eq!(doc["n_vocab"].as_u64().unwrap() as usize, N_VOCAB);
+        assert_eq!(
+            doc["timestamp_begin"].as_u64().unwrap() as u32,
+            tk.timestamp_begin()
+        );
+        assert_eq!(doc["eot"].as_u64().unwrap() as u32, tk.eot());
+        assert_eq!(
+            doc["no_timestamps"].as_u64().unwrap() as u32,
+            tk.no_timestamps()
+        );
+        assert_eq!(
+            doc["sample_begin"].as_u64().unwrap() as usize,
+            tk.sot_sequence.len()
+        );
+        assert_eq!(doc["lcg_seed"].as_u64().unwrap(), LCG_SEED);
+    }
+
+    #[test]
+    fn suppress_blank_ids_match_the_fixture() {
+        init_device();
+        let Some(tk) = tokenizer() else { return };
+        let want = common::as_u32s(&logit_filters()["suppress_blank"]["suppressed_tokens"]);
+
+        let mut got = tk.encode(" ");
+        got.push(tk.eot());
+        got.sort_unstable();
+        assert_eq!(got, want, "SuppressBlank masks exactly `encode(\" \") + [eot]`");
+
+        let mask = build_mask(&got, N_VOCAB);
+        assert_eq!(
+            neg_inf_indices(&mask),
+            want.iter().map(|&t| t as usize).collect::<Vec<_>>()
+        );
+    }
+
+    /// `DEC-3`: the `-1` sentinel *adds* the non-speech set to the explicit
+    /// ids, it does not replace them. Reverting that fix fails here.
+    #[test]
+    fn suppress_token_ids_match_the_fixture() {
+        init_device();
+        let Some(tk) = tokenizer() else { return };
+        let doc = logit_filters();
+
+        for (spec, key) in [("-1", "sentinel_minus1"), ("1,2,3", "explicit_list")] {
+            let want = common::as_u32s(&doc["suppress_tokens"][key]);
+            let got = suppress_token_ids(&tk, Some(spec))
+                .unwrap_or_else(|| panic!("{spec:?} is truthy: the filter must be installed"));
+            assert_eq!(got, want, "suppress_tokens = {spec:?}");
+        }
+
+        // "-1,50257" must suppress 50257 *and* the whole non-speech set.
+        let sentinel = common::as_u32s(&doc["suppress_tokens"]["sentinel_minus1"]);
+        let combined = suppress_token_ids(&tk, Some("-1,50257")).unwrap();
+        for id in &sentinel {
+            assert!(combined.contains(id), "the -1 sentinel set must survive {id}");
+        }
+        assert!(combined.contains(&50257), "the explicit id must survive too");
+    }
+
+    /// `DEC-4`: upstream guards the filter with `if
+    /// self.options.suppress_tokens:`, so a falsy option installs nothing —
+    /// not even the control tokens.
+    #[test]
+    fn suppress_tokens_is_not_installed_for_a_falsy_option() {
+        init_device();
+        let Some(tk) = tokenizer() else { return };
+
+        for spec in [None, Some("")] {
+            assert!(
+                suppress_token_ids(&tk, spec).is_none(),
+                "{spec:?} is falsy in Python, so no SuppressTokens filter is appended"
+            );
+        }
+
+        // The fixture's `empty` entry records what upstream's
+        // `_get_suppress_tokens([])` *returns*. It is never applied, but it is
+        // exactly the control-token tail appended to every non-empty set.
+        let controls = common::as_u32s(&logit_filters()["suppress_tokens"]["empty"]);
+        let explicit = suppress_token_ids(&tk, Some("1,2,3")).unwrap();
+        for id in &controls {
+            assert!(
+                explicit.contains(id),
+                "control token {id} must be in every non-empty suppression set"
+            );
+        }
+    }
+
+    #[test]
+    fn timestamp_rules_match_the_port_semantics_fixture() {
+        init_device();
+        let Some(tk) = tokenizer() else { return };
+        let doc = logit_filters();
+
+        let n_vocab = doc["n_vocab"].as_u64().unwrap() as usize;
+        let ts_begin = doc["timestamp_begin"].as_u64().unwrap() as usize;
+        let sample_begin = doc["sample_begin"].as_u64().unwrap() as usize;
+        let seed = doc["lcg_seed"].as_u64().unwrap();
+
+        // Both rows, regenerated from the recorded LCG rather than committed.
+        let all = common::synth_logits(2, n_vocab, seed, ts_begin);
+
+        let cases = doc["timestamp_rules_port_semantics"]
+            .as_object()
+            .expect("fixture is missing timestamp_rules_port_semantics");
+        assert!(!cases.is_empty(), "no port-semantics cases in the fixture");
+
+        for (name, case) in cases {
+            let tokens = common::as_u32s(&case["tokens"]);
+            let cap = case["max_initial_timestamp_index"]
+                .as_u64()
+                .map(|v| v as usize);
+
+            for row_desc in case["rows"].as_array().unwrap() {
+                let r = row_desc["row"].as_u64().unwrap() as usize;
+                let label = row_desc["label"].as_str().unwrap();
+                let logits =
+                    Array::from_slice(&all[r * n_vocab..(r + 1) * n_vocab], &[n_vocab as i32]);
+
+                let out =
+                    apply_timestamp_rules(&logits, &tokens, sample_begin, &tk, cap).unwrap();
+                let got: &[f32] = out.as_slice();
+
+                assert_eq!(
+                    common::neg_inf_ranges(got),
+                    common::as_ranges(&row_desc["suppressed_ranges"]),
+                    "{name}/{label}: suppressed ranges diverge from the Python reference"
+                );
+
+                let finite: Vec<f64> = got.iter().filter(|v| v.is_finite()).map(|&v| v as f64).collect();
+                assert_eq!(
+                    finite.len(),
+                    row_desc["finite_count"].as_u64().unwrap() as usize,
+                    "{name}/{label}: finite count"
+                );
+
+                // Guards against a mask that suppresses the right indices while
+                // corrupting the surviving logits. Summed in f64 against
+                // numpy's pairwise sum, hence a relative tolerance.
+                let want_sum = row_desc["finite_sum"].as_f64().unwrap();
+                let got_sum: f64 = finite.iter().sum();
+                assert!(
+                    (got_sum - want_sum).abs() <= 1e-6 * want_sum.abs().max(1.0),
+                    "{name}/{label}: finite sum {got_sum} != {want_sum}"
+                );
+            }
+        }
     }
 }
