@@ -25,7 +25,7 @@
 
 mod common;
 
-use mlx_rs::{Array, ops::indexing::IndexOp};
+use mlx_rs::{Array, ops::indexing::IndexOp, transforms::eval};
 use mlx_whisper_rs::whisper::{BlockCache, ModelDimensions, Whisper, sinusoids};
 
 /// A model small enough to build in milliseconds. None of the dimensions are
@@ -91,8 +91,24 @@ fn model_and_audio_features() -> (Whisper, Array) {
 }
 
 /// One `[n_vocab]` row of a `[1, seq_len, n_vocab]` logits array.
+///
+/// The `reshape` and the `eval` are both load-bearing. Indexing produces a
+/// strided view over the parent buffer, and `as_slice` hands back a plain
+/// `&[f32]` over the underlying allocation — reading a view's rows through it
+/// walks off the row it was meant to return. `reshape` forces a contiguous
+/// copy, and `eval` materialises it: MLX is lazy, so without that the copy is
+/// still an unevaluated graph node with no buffer behind it.
+///
+/// Elsewhere in the suite `as_slice` is called with neither, but those arrays
+/// are whole contiguous results (`sinusoids(...)`, a log-mel spectrogram)
+/// rather than a row sliced out of a larger one.
 fn logits_row(logits: &Array, pos: i32) -> Vec<f32> {
-    let row = logits.index((0i32,)).index((pos,));
+    let row = logits
+        .index((0i32,))
+        .index((pos,))
+        .reshape(&[-1])
+        .expect("reshape a logits row to a contiguous 1-D array");
+    eval([&row]).expect("evaluate a logits row");
     let data: &[f32] = row.as_slice();
     data.to_vec()
 }
